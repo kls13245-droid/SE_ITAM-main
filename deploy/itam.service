@@ -1,0 +1,16 @@
+[Unit]
+Description=SE ITAM Django (gunicorn)
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/SE_ITAM-main
+Environment=DJANGO_DEBUG=False
+Environment=DJANGO_ALLOWED_HOSTS=192.168.70.250,localhost
+Environment=CSRF_TRUSTED_ORIGINS=http://192.168.70.250
+Environment=DJANGO_SECRET_KEY=change-me
+ExecStart=/usr/bin/gunicorn config.wsgi:application --bind 127.0.0.1:8000 --workers 3
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
