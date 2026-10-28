@@ -12,8 +12,15 @@ urlpatterns = [
     
     # ⭐️ 토폴로지(캠퍼스/빌딩/랙) 추가 API 라우팅
     path('api/campus/add/', views.add_campus, name='add_campus'),
+    path('api/campus/update/<int:campus_id>/', views.update_campus, name='update_campus'),
+    path('api/campus/delete/<int:campus_id>/', views.delete_campus, name='delete_campus'),
     path('api/building/add/', views.add_building, name='add_building'),
+    path('api/building/update/<int:building_id>/', views.update_building, name='update_building'),
+    path('api/building/delete/<int:building_id>/', views.delete_building, name='delete_building'),
     path('api/rack/add/', views.add_rack, name='add_rack'),
+    path('api/rack/update/<int:rack_id>/', views.update_rack, name='update_rack'),
+    path('api/rack/delete/<int:rack_id>/', views.delete_rack, name='delete_rack'),
+    path('api/server/import/', views.import_servers, name='import_servers'),
     
     # 서버 자산 추가 / 수정 / 삭제 API
     path('api/server/add/', views.add_server, name='add_server'),

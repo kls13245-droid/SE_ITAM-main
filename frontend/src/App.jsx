@@ -353,6 +353,95 @@ export default function App() {
     }).catch(err => showToast("오류가 발생했습니다.", "error"));
   };
 
+
+  const handleRenameCampus = (campus) => {
+    const name = window.prompt('캠퍼스 이름', campus.name);
+    if (!name || name === campus.name) return;
+    apiFetch(`/api/campus/update/${campus.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
+      .then(res => { if (!res.ok) throw new Error(); return res.json(); })
+      .then(() => { setSiteData(siteData.map(c => c.id === campus.id ? { ...c, name } : c)); showToast('캠퍼스 이름이 수정되었습니다.'); })
+      .catch(() => showToast('수정 실패', 'error'));
+  };
+  const handleDeleteCampus = (campus) => {
+    if (!window.confirm(`${campus.name} 캠퍼스와 하위 데이터를 삭제할까요?`)) return;
+    apiFetch(`/api/campus/delete/${campus.id}/`, { method: 'DELETE' })
+      .then(res => { if (!res.ok) throw new Error(); })
+      .then(() => { setSiteData(siteData.filter(c => c.id !== campus.id)); goHome(); showToast('캠퍼스가 삭제되었습니다.'); })
+      .catch(() => showToast('삭제 실패', 'error'));
+  };
+  const handleRenameBuilding = (building) => {
+    const name = window.prompt('건물 이름', building.name);
+    if (!name || name === building.name) return;
+    apiFetch(`/api/building/update/${building.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
+      .then(res => { if (!res.ok) throw new Error(); return res.json(); })
+      .then(() => {
+        setSiteData(siteData.map(c => ({ ...c, buildings: c.buildings?.map(b => b.id === building.id ? { ...b, name } : b) })));
+        if (selectedBuilding?.id === building.id) setSelectedBuilding({ ...selectedBuilding, name });
+        showToast('건물 이름이 수정되었습니다.');
+      })
+      .catch(() => showToast('수정 실패', 'error'));
+  };
+  const handleDeleteBuilding = (building) => {
+    if (!window.confirm(`${building.name} 건물과 하위 랙을 삭제할까요?`)) return;
+    apiFetch(`/api/building/delete/${building.id}/`, { method: 'DELETE' })
+      .then(res => { if (!res.ok) throw new Error(); })
+      .then(() => {
+        setSiteData(siteData.map(c => ({ ...c, buildings: c.buildings?.filter(b => b.id !== building.id) })));
+        if (selectedBuilding?.id === building.id) goHome();
+        showToast('건물이 삭제되었습니다.');
+      })
+      .catch(() => showToast('삭제 실패', 'error'));
+  };
+  const handleRenameRack = (rack) => {
+    const name = window.prompt('랙 이름', rack.name);
+    if (!name || name === rack.name) return;
+    apiFetch(`/api/rack/update/${rack.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
+      .then(res => { if (!res.ok) throw new Error(); return res.json(); })
+      .then(() => {
+        const updated = { ...selectedBuilding, racks: selectedBuilding.racks.map(r => r.id === rack.id ? { ...r, name } : r) };
+        setSelectedBuilding(updated);
+        if (selectedRack?.id === rack.id) setSelectedRack({ ...selectedRack, name });
+        showToast('랙 이름이 수정되었습니다.');
+      })
+      .catch(() => showToast('수정 실패', 'error'));
+  };
+  const handleDeleteRack = (rack) => {
+    if (!window.confirm(`${rack.name} 랙과 장비를 삭제할까요?`)) return;
+    apiFetch(`/api/rack/delete/${rack.id}/`, { method: 'DELETE' })
+      .then(res => { if (!res.ok) throw new Error(); })
+      .then(() => {
+        setSelectedBuilding({ ...selectedBuilding, racks: selectedBuilding.racks.filter(r => r.id !== rack.id) });
+        if (selectedRack?.id === rack.id) setSelectedRack(null);
+        showToast('랙이 삭제되었습니다.');
+      })
+      .catch(() => showToast('삭제 실패', 'error'));
+  };
+  const handleImportCsv = async (file) => {
+    if (!selectedRack) { showToast('랙을 먼저 선택하세요.', 'error'); return; }
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    const headers = lines[0].split(',').map(h => h.replaceAll('"','').trim().toLowerCase());
+    const idx = (name) => headers.findIndex(h => h.includes(name));
+    const rows = lines.slice(1).map(line => {
+      const cols = line.split(',').map(c => c.replaceAll('"','').trim());
+      return {
+        hostname: cols[idx('hostname')] || cols[0],
+        model_name: cols[idx('model')] || '',
+        status: cols[idx('status')] || 'WAIT',
+        start_u: cols[idx('start')] || 1,
+        size_u: cols[idx('size')] || 1,
+        power_w: cols[idx('power')] || '',
+        public_ip: cols[idx('public')] || '',
+        private_ip: cols[idx('private')] || '',
+        mgmt_ip: cols[idx('mgmt')] || '',
+      };
+    });
+    apiFetch('/api/server/import/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rack_id: selectedRack.id, rows }) })
+      .then(res => res.json())
+      .then(data => { showToast(`${data.created || 0}대 가져왔습니다.`); fetchSiteData(); })
+      .catch(() => showToast('가져오기 실패', 'error'));
+  };
+
   const handleAddRackClick = () => { setNewRackForm({ name: '', location: '', total_u_space: 42 }); setIsAddingRack(true); };
   const handleNewRackChange = (field, value) => setNewRackForm(prev => ({ ...prev, [field]: value }));
   const handleSaveRack = () => {
@@ -796,6 +885,10 @@ export default function App() {
         onSaveBuilding={handleSaveBuilding}
         onCancelBuilding={() => { setIsAddingBuilding(false); setNewBuildingName(''); setTargetCampusId(null); }}
         onBuildingClick={handleBuildingClick}
+        onRenameCampus={handleRenameCampus}
+        onDeleteCampus={handleDeleteCampus}
+        onRenameBuilding={handleRenameBuilding}
+        onDeleteBuilding={handleDeleteBuilding}
       />
 
       {/* Main Content Area */}
@@ -818,7 +911,8 @@ export default function App() {
                 {globalSearchResults.length > 0 ? (
                   <div className="py-2"><div className="px-4 py-2 text-[10px] font-bold text-slate-400 uppercase">검색 결과</div>
                     {globalSearchResults.map((res, idx) => (
-                      <div key={idx} onClick={() => handleGlobalSearchSelect(res)} className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 flex flex-col gap-1">
+                      <div key={idx} onClick={() => handleGlobalSearchSelect(res)} className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 flex items-center justify-between gap-2">
+                        <div className="flex flex-col gap-1 min-w-0">
                         <div className="flex justify-between items-center"><span className="font-bold text-blue-700 font-mono text-sm">{res.server.hostname}</span><span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-500 border border-slate-200">{res.server.specs?.ip || 'IP 없음'}</span></div>
                         <div className="flex justify-between items-end"><span className="text-xs text-slate-500">{res.server.model_name}</span><div className="text-[10px] font-medium text-slate-400 flex items-center"><MapPin size={10} className="mr-1" />{res.building.name} &gt; {res.rack.name} ({res.server.start_u}U)</div></div>
                       </div>
@@ -842,7 +936,7 @@ export default function App() {
                 {selectedBuilding.racks && selectedBuilding.racks.map(rack => (
                   <div key={rack.id} onClick={() => handleRackClick(rack)} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-lg hover:border-blue-400 transition-all cursor-pointer group">
                     <div className="flex justify-between items-start mb-4"><div className="p-3 bg-blue-50 rounded-xl group-hover:bg-blue-100 transition-colors"><Server size={24} className="text-blue-600" /></div><span className="bg-slate-100 text-slate-600 text-xs px-2.5 py-1 rounded-full font-bold shadow-sm">{rack.total_u_space}U</span></div>
-                    <h3 className="text-lg font-bold text-slate-800">{rack.name}</h3>
+                    <div className="flex items-center justify-between"><h3 className="text-lg font-bold text-slate-800">{rack.name}</h3><span className="flex gap-1"><button onClick={(e) => { e.stopPropagation(); handleRenameRack(rack); }} className="text-slate-400 hover:text-blue-600"><Edit size={14}/></button><button onClick={(e) => { e.stopPropagation(); handleDeleteRack(rack); }} className="text-slate-400 hover:text-red-600"><Trash2 size={14}/></button></span></div>
                     <p className="text-sm text-slate-500 mt-1 flex items-center"><MapPin size={14} className="mr-1 opacity-70"/> {rack.location || '위치 미지정'}</p>
                     <div className="mt-5 pt-4 border-t border-slate-100 flex justify-between items-center text-sm"><span className="text-slate-500 font-medium">실장 장비</span><span className="font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{rack.servers ? rack.servers.length : 0}대</span></div>
                   </div>
@@ -876,6 +970,7 @@ export default function App() {
                     <div className="flex items-center justify-between border-b border-slate-200 pb-3 mb-4 shrink-0">
                       <h2 className="text-xl font-bold text-slate-800 flex items-center"><List className="text-blue-500 mr-2" size={20} /> 랙 자산 및 자원 할당 명세서</h2>
                       <div className="flex items-center gap-2">
+                        <label className="px-3 py-1.5 flex items-center bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold transition-colors shadow-sm cursor-pointer">CSV 가져오기<input type="file" accept=".csv" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleImportCsv(e.target.files[0]); e.target.value=''; }} /></label>
                         <button onClick={handleExportExcel} className="px-3 py-1.5 flex items-center bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold transition-colors shadow-sm" title="CSV 다운로드와 엑셀 붙여넣기용 복사를 함께 수행"><Copy size={14} className="mr-1.5" /> 엑셀 내보내기</button>
                         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
                           <option value="ALL">전체 상태</option>
@@ -1275,7 +1370,7 @@ export default function App() {
                           <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
                             <div className="flex justify-between items-start mb-3 border-b border-slate-100 pb-2">
                               <div><span className={`text-xs font-bold px-2 py-0.5 rounded mr-2 ${hist.type === 'Created' ? 'bg-emerald-100 text-emerald-700' : hist.type === 'Deleted' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>{hist.type === 'Created' ? '신규 등록' : hist.type === 'Deleted' ? '장비 폐기' : '정보 수정'}</span><span className="text-sm font-bold text-slate-700">{hist.date}</span></div>
-                              <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded font-mono font-bold flex items-center"><UserIcon size={12} className="mr-1" />{hist.user}</span>
+                              <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded font-mono font-bold flex items-center"><UserIcon size={12} className="mr-1" />{hist.user}</span><span className="text-xs text-slate-500 ml-2">{hist.changes?.map(c => c.field).join(', ') || '변경 없음'}</span>
                             </div>
                             <div className="space-y-2">
                               {hist.changes && hist.changes.length > 0 ? hist.changes.map((change, cIdx) => (

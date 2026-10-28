@@ -216,3 +216,91 @@ def api_me(request):
     if request.user.is_authenticated:
         return JsonResponse({"authenticated": True, "username": request.user.username})
     return JsonResponse({"authenticated": False}, status=401)
+
+@csrf_exempt
+@login_required_api
+def update_campus(request, campus_id):
+    if request.method != 'PUT':
+        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
+    campus = Campus.objects.get(id=campus_id)
+    data = json.loads(request.body)
+    campus.name = data.get('name', campus.name)
+    campus.save()
+    return JsonResponse({'id': campus.id, 'name': campus.name})
+
+@csrf_exempt
+@login_required_api
+def delete_campus(request, campus_id):
+    if request.method != 'DELETE':
+        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
+    Campus.objects.get(id=campus_id).delete()
+    return JsonResponse({'message': 'Deleted'})
+
+@csrf_exempt
+@login_required_api
+def update_building(request, building_id):
+    if request.method != 'PUT':
+        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
+    building = Building.objects.get(id=building_id)
+    data = json.loads(request.body)
+    building.name = data.get('name', building.name)
+    building.save()
+    return JsonResponse({'id': building.id, 'name': building.name})
+
+@csrf_exempt
+@login_required_api
+def delete_building(request, building_id):
+    if request.method != 'DELETE':
+        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
+    Building.objects.get(id=building_id).delete()
+    return JsonResponse({'message': 'Deleted'})
+
+@csrf_exempt
+@login_required_api
+def update_rack(request, rack_id):
+    if request.method != 'PUT':
+        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
+    rack = Rack.objects.get(id=rack_id)
+    data = json.loads(request.body)
+    rack.name = data.get('name', rack.name)
+    rack.location = data.get('location', rack.location)
+    rack.total_u_space = data.get('total_u_space', rack.total_u_space)
+    rack.save()
+    return JsonResponse({'id': rack.id, 'name': rack.name, 'location': rack.location, 'total_u_space': rack.total_u_space})
+
+@csrf_exempt
+@login_required_api
+def delete_rack(request, rack_id):
+    if request.method != 'DELETE':
+        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
+    Rack.objects.get(id=rack_id).delete()
+    return JsonResponse({'message': 'Deleted'})
+
+@csrf_exempt
+@login_required_api
+def import_servers(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
+    data = json.loads(request.body)
+    rack_id = data.get('rack_id')
+    rows = data.get('rows', [])
+    created = 0
+    for row in rows:
+        if not row.get('hostname'):
+            continue
+        ServerAsset.objects.create(
+            rack_id=rack_id,
+            hostname=row.get('hostname', ''),
+            model_name=row.get('model_name', ''),
+            status=row.get('status') or 'WAIT',
+            start_u=int(row.get('start_u') or 1),
+            size_u=int(row.get('size_u') or 1),
+            specs={
+                'power_w': row.get('power_w', ''),
+                'public_ip': row.get('public_ip', ''),
+                'private_ip': row.get('private_ip', ''),
+                'mgmt_ip': row.get('mgmt_ip', ''),
+            }
+        )
+        created += 1
+    return JsonResponse({'created': created})

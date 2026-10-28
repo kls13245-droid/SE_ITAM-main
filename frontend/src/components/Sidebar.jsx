@@ -1,5 +1,5 @@
 import React from 'react';
-import { Folder, FolderOpen, Plus, RefreshCw, CheckCircle, X, Building, ChevronRight, LogOut } from 'lucide-react';
+import { Folder, FolderOpen, Plus, RefreshCw, CheckCircle, X, Building, ChevronRight, LogOut, Pencil, Trash2 } from 'lucide-react';
 
 export default function Sidebar({
   siteData, loading, expandedCampus, selectedBuilding,
@@ -7,6 +7,7 @@ export default function Sidebar({
   isAddingBuilding, newBuildingName, setNewBuildingName, targetCampusId,
   onGoHome, onLogout, onRefresh, onStartAddCampus, onSaveCampus, onCancelCampus,
   onCampusClick, onStartAddBuilding, onSaveBuilding, onCancelBuilding, onBuildingClick,
+  onRenameCampus, onDeleteCampus, onRenameBuilding, onDeleteBuilding,
 }) {
   return (
     <div className="w-72 bg-slate-900 text-slate-300 flex flex-col shadow-xl z-10 shrink-0">
@@ -35,12 +36,15 @@ export default function Sidebar({
         {loading ? <div className="text-center p-4 text-slate-500 text-sm">데이터 동기화 중...</div> : siteData.length === 0 ? <div className="text-center p-4 text-slate-500 text-sm">등록된 사이트가 없습니다.</div> : siteData.map(campus => (
           <div key={campus.id} className="mb-1">
             <div className="w-full flex items-center justify-between p-2 rounded hover:bg-slate-800 group">
-              <button onClick={() => onCampusClick(campus.id)} className="flex-1 flex items-center text-left">
-                {expandedCampus === campus.id ? <FolderOpen size={18} className="text-blue-400 mr-2" /> : <Folder size={18} className="text-slate-500 mr-2" />}
-                <span className={expandedCampus === campus.id ? 'text-white font-medium' : ''}>{campus.name}</span>
+              <button onClick={() => onCampusClick(campus.id)} className="flex-1 flex items-center text-left min-w-0">
+                {expandedCampus === campus.id ? <FolderOpen size={18} className="text-blue-400 mr-2 shrink-0" /> : <Folder size={18} className="text-slate-500 mr-2 shrink-0" />}
+                <span className={`truncate ${expandedCampus === campus.id ? 'text-white font-medium' : ''}`}>{campus.name}</span>
               </button>
-              <button onClick={() => onStartAddBuilding(campus.id)} className="text-slate-400 hover:text-white opacity-0 group-hover:opacity-100"><Plus size={14}/></button>
-              {campus.buildings?.length > 0 && <ChevronRight size={14} className={expandedCampus === campus.id ? 'rotate-90' : ''} />}
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                <button onClick={() => onRenameCampus(campus)} className="text-slate-400 hover:text-white" title="이름 수정"><Pencil size={12}/></button>
+                <button onClick={() => onDeleteCampus(campus)} className="text-slate-400 hover:text-red-400" title="삭제"><Trash2 size={12}/></button>
+                <button onClick={() => onStartAddBuilding(campus.id)} className="text-slate-400 hover:text-white" title="건물 추가"><Plus size={14}/></button>
+              </div>
             </div>
             {expandedCampus === campus.id && (
               <div className="ml-6 mt-1 border-l border-slate-700 pl-2">
@@ -52,9 +56,13 @@ export default function Sidebar({
                   </div>
                 )}
                 {campus.buildings?.map(building => (
-                  <button key={building.id} onClick={() => onBuildingClick(building, campus)} className={`w-full flex items-center p-2 rounded mb-1 ${selectedBuilding?.id === building.id ? 'bg-blue-600/20 text-blue-400 font-medium' : 'hover:bg-slate-800 text-sm'}`}>
-                    <Building size={14} className="mr-2 opacity-70" /><span className="truncate">{building.name}</span>
-                  </button>
+                  <div key={building.id} className="flex items-center group/b">
+                    <button onClick={() => onBuildingClick(building, campus)} className={`flex-1 flex items-center p-2 rounded mb-1 min-w-0 ${selectedBuilding?.id === building.id ? 'bg-blue-600/20 text-blue-400 font-medium' : 'hover:bg-slate-800 text-sm'}`}>
+                      <Building size={14} className="mr-2 opacity-70 shrink-0" /><span className="truncate">{building.name}</span>
+                    </button>
+                    <button onClick={() => onRenameBuilding(building)} className="opacity-0 group-hover/b:opacity-100 text-slate-400 hover:text-white px-1" title="수정"><Pencil size={12}/></button>
+                    <button onClick={() => onDeleteBuilding(building)} className="opacity-0 group-hover/b:opacity-100 text-slate-400 hover:text-red-400 px-1" title="삭제"><Trash2 size={12}/></button>
+                  </div>
                 ))}
               </div>
             )}
