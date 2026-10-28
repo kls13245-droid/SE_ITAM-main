@@ -569,112 +569,89 @@ export default function App() {
   const handleExportExcel = () => {
     if (!selectedRack?.servers?.length) { showToast("내보낼 장비가 없습니다.", "error"); return; }
 
-    const esc = (v) => `"${String(v ?? '').replaceAll('"','""')}"`;
-    const lines = [];
-    const addTable = (title, headers, rows, totalLabel, totalValue) => {
-      lines.push(esc(title));
-      lines.push(headers.map(esc).join(","));
-      rows.forEach(r => lines.push(r.map(esc).join(",")));
-      if (totalLabel) lines.push([esc(""), esc(totalLabel), ...Array(Math.max(0, headers.length - 3)).fill(esc("")), esc(totalValue)].join(","));
-      lines.push("");
-    };
+    const th = 'background:#ddebf7;color:#1e293b;font-weight:700;font-size:11pt;border:1px solid #94a3b8;padding:4px 6px;text-align:center;font-family:Calibri,Arial,sans-serif;';
+    const td = 'font-size:11pt;border:1px solid #94a3b8;padding:4px 6px;text-align:center;font-family:Calibri,Arial,sans-serif;';
+    const tdL = td + 'text-align:left;';
+    const total = 'background:#f1f5f9;font-weight:700;font-size:11pt;border:1px solid #94a3b8;padding:4px 6px;text-align:right;font-family:Calibri,Arial,sans-serif;';
+    const red = 'color:#dc2626;font-weight:700;';
+    const green = 'color:#059669;font-weight:700;';
+    const blue = 'color:#2563eb;font-weight:700;';
 
-    const powerRows = summaryStats.power.map((item, idx) => [
-      idx === 0 ? "전기" : "",
-      item.model_name,
-      `${item.power_w}W`,
-      item.count,
-      `${item.power_w * item.count}W`,
-    ]);
-    addTable("전기 (Power) 합계", ["구분", "항목 (Model)", "전력(W)", "서버수", "합계(W)"], powerRows, "총 합계", `${summaryStats.power.reduce((s, i) => s + i.power_w * i.count, 0)}W`);
+    const table = (title, headers, body) => `
+      <h3 style="font-size:12pt;margin:16px 0 6px;color:#1e293b;">${title}</h3>
+      <table style="border-collapse:collapse;margin-bottom:12px;">
+        <tr>${headers.map(h => `<th style="${th}">${h}</th>`).join('')}</tr>
+        ${body}
+      </table>`;
 
-    const pubRows = summaryStats.pubLan.map((item, idx) => [
-      idx === 0 ? "Pub LAN" : "",
-      item.model_name,
-      `${item.pub_lan}ea`,
-      item.count,
-      `${item.pub_lan * item.count}ea`,
-    ]);
-    addTable("Public LAN 할당", ["구분", "항목 (Model)", "LAN(포트)", "서버수", "합계(포트)"], pubRows, "총 합계", `${summaryStats.pubLan.reduce((s, i) => s + i.pub_lan * i.count, 0)}ea`);
+    const powerBody = summaryStats.power.map((item, idx) => `
+      <tr>
+        ${idx === 0 ? `<td rowspan="${summaryStats.power.length}" style="${td}${red}">전기</td>` : ''}
+        <td style="${tdL}">${item.model_name}</td>
+        <td style="${td}">${item.power_w}W</td>
+        <td style="${td}">${item.count}</td>
+        <td style="${td}${red}">${item.power_w * item.count}W</td>
+      </tr>`).join('') + `
+      <tr><td colspan="4" style="${total}">총 합계</td><td style="${td}${red}">${summaryStats.power.reduce((s,i)=>s+i.power_w*i.count,0)}W</td></tr>`;
 
-    const privRows = summaryStats.privLan.map((item, idx) => [
-      idx === 0 ? "Priv LAN" : "",
-      item.model_name,
-      `${item.priv_lan}ea`,
-      item.count,
-      `${item.priv_lan * item.count}ea`,
-    ]);
-    addTable("Private LAN 할당", ["구분", "항목 (Model)", "LAN(포트)", "서버수", "합계(포트)"], privRows, "총 합계", `${summaryStats.privLan.reduce((s, i) => s + i.priv_lan * i.count, 0)}ea`);
+    const lanBody = (label, items, key) => items.map((item, idx) => `
+      <tr>
+        ${idx === 0 ? `<td rowspan="${items.length}" style="${td}${red}">${label}</td>` : ''}
+        <td style="${tdL}">${item.model_name}</td>
+        <td style="${td}">${item[key]}ea</td>
+        <td style="${td}">${item.count}</td>
+        <td style="${td}">${item[key] * item.count}ea</td>
+      </tr>`).join('') + `
+      <tr><td colspan="4" style="${total}">총 합계</td><td style="${td}${blue}">${items.reduce((s,i)=>s+i[key]*i.count,0)}ea</td></tr>`;
 
-    const ipItems = summaryStats.ip.filter(item => item.pub_ip_count > 0 || item.vip_count > 0);
-    const ipRows = [];
-    ipItems.forEach((item, idx) => {
-      if (item.pub_ip_count > 0) ipRows.push([idx === 0 ? "Public IP" : "", `${item.model_name} (${item.power_w}W)`, `${item.pub_ip_count}ea`]);
-      if (item.vip_count > 0) ipRows.push(["Virtual IP", `${item.model_name} (${item.power_w}W)`, `${item.vip_count}ea`]);
-    });
-    addTable("IP 할당 현황", ["구분", "항목 (Model)", "할당 IP 총계"], ipRows, "총 합계", `${ipItems.reduce((s, i) => s + i.pub_ip_count + i.vip_count, 0)}ea`);
+    const ipItems = summaryStats.ip.filter(i => i.pub_ip_count > 0 || i.vip_count > 0);
+    const ipBody = ipItems.map(item => `
+      ${item.pub_ip_count > 0 ? `<tr><td style="${td}${red}">Public IP</td><td style="${tdL}">${item.model_name} (${item.power_w}W)</td><td style="${td}">${item.pub_ip_count}ea</td></tr>` : ''}
+      ${item.vip_count > 0 ? `<tr><td style="${td}${red}">Virtual IP</td><td style="${tdL}">${item.model_name} (${item.power_w}W)</td><td style="${td}${green}">${item.vip_count}ea</td></tr>` : ''}
+    `).join('') + `
+      <tr><td colspan="2" style="${total}">총 합계</td><td style="${td}${green}">${ipItems.reduce((s,i)=>s+i.pub_ip_count+i.vip_count,0)}ea</td></tr>`;
 
-    const csv = lines.join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const a = document.createElement("a");
+    const detailBody = rackTableRows.map(row => {
+      if (!row.isServer) return `<tr><td style="${td}">${row.u}</td><td style="${td}"></td><td style="${td}"></td><td style="${td}"></td><td style="${td}"></td><td style="${td}"></td><td style="${td}"></td><td style="${td}"></td><td style="${td}"></td></tr>`;
+      if (!row.isTopU) return `<tr><td style="${td}">${row.u}</td></tr>`;
+      const s = row.server;
+      const power = Number(s.specs?.power_w) || 0;
+      return `<tr>
+        <td style="${td}">${row.u}</td>
+        <td rowspan="${row.rowSpan}" style="${tdL}">${s.model_name || '-'}</td>
+        <td rowspan="${row.rowSpan}" style="${tdL}">${s.hostname || '-'}</td>
+        <td rowspan="${row.rowSpan}" style="${td}">${power ? power + 'W' : ''}</td>
+        <td rowspan="${row.rowSpan}" style="${td}">${power ? (power/220).toFixed(2) + 'A' : ''}</td>
+        <td rowspan="${row.rowSpan}" style="${td}">${s.specs?.public_lan || ''}</td>
+        <td rowspan="${row.rowSpan}" style="${td}${red}">${s.specs?.public_ip ? s.specs.public_ip.split(',').filter(Boolean).length : ''}</td>
+        <td rowspan="${row.rowSpan}" style="${td}${green}">${s.specs?.virtual_ip ? s.specs.virtual_ip.split(',').filter(Boolean).length : ''}</td>
+        <td rowspan="${row.rowSpan}" style="${td}${blue}">${s.specs?.private_lan || ''}</td>
+      </tr>`;
+    }).join('') + `
+      <tr>
+        <td colspan="3" style="${total}">전체 합계</td>
+        <td style="${td}${red}">${detailedTotals.power}W</td>
+        <td style="${td}">${detailedTotals.current > 0 ? detailedTotals.current.toFixed(2) + 'A' : '-'}</td>
+        <td style="${td}">${detailedTotals.lan || '-'}</td>
+        <td style="${td}${red}">${detailedTotals.pip || '-'}</td>
+        <td style="${td}${green}">${detailedTotals.vip || '-'}</td>
+        <td style="${td}${blue}">${detailedTotals.priv || '-'}</td>
+      </tr>`;
+
+    const html = `<html><head><meta charset="utf-8"></head><body>
+      ${table('전기 (Power) 합계', ['구분','항목 (Model)','전력(W)','서버수','합계(W)'], powerBody)}
+      ${table('Public LAN 할당', ['구분','항목 (Model)','LAN(포트)','서버수','합계(포트)'], lanBody('Pub LAN', summaryStats.pubLan, 'pub_lan'))}
+      ${table('Private LAN 할당', ['구분','항목 (Model)','LAN(포트)','서버수','합계(포트)'], lanBody('Priv LAN', summaryStats.privLan, 'priv_lan'))}
+      ${table('IP 할당 현황', ['구분','항목 (Model)','할당 IP 총계'], ipBody)}
+      ${table('상세 랙 실장도 목록', ['No','Product','HOST','전기(W)','전류(A)','LAN','P.IP','V.IP','Private'], detailBody)}
+    </body></html>`;
+
+    const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+    const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${selectedRack.name}-summary.csv`;
+    a.download = `${selectedRack.name}-summary.xls`;
     a.click();
-
-    const tableDiv = document.getElementById('rack-summary-tables');
-    if (tableDiv) {
-      const clone = tableDiv.cloneNode(true);
-      clone.querySelectorAll('h3').forEach(el => {
-        el.style.fontSize = '12pt';
-        el.style.fontWeight = '700';
-        el.style.margin = '12px 0 6px';
-        el.style.color = '#1e293b';
-      });
-      clone.querySelectorAll('table').forEach(table => {
-        table.style.borderCollapse = 'collapse';
-        table.style.fontSize = '11pt';
-        table.style.fontFamily = 'Calibri, Arial, sans-serif';
-        table.style.width = '100%';
-        table.querySelectorAll('th, td').forEach(el => {
-          const cls = el.className || '';
-          el.style.fontSize = '11pt';
-          el.style.fontFamily = 'Calibri, Arial, sans-serif';
-          el.style.border = '1px solid #94a3b8';
-          el.style.padding = '4px 6px';
-          el.style.verticalAlign = 'middle';
-          if (cls.includes('bg-[#ddebf7]') || el.parentElement?.className?.includes('bg-[#ddebf7]')) {
-            el.style.backgroundColor = '#ddebf7';
-            el.style.fontWeight = '700';
-          }
-          if (cls.includes('bg-slate-100')) el.style.backgroundColor = '#f1f5f9';
-          if (cls.includes('text-red-600')) el.style.color = '#dc2626';
-          if (cls.includes('text-emerald-600')) el.style.color = '#059669';
-          if (cls.includes('text-blue-600')) el.style.color = '#2563eb';
-          if (cls.includes('font-bold') || cls.includes('font-black')) el.style.fontWeight = '700';
-          if (cls.includes('text-left')) el.style.textAlign = 'left';
-          else el.style.textAlign = 'center';
-        });
-        table.querySelectorAll('thead th').forEach(el => {
-          el.style.backgroundColor = '#ddebf7';
-          el.style.fontWeight = '700';
-          el.style.color = '#1e293b';
-        });
-      });
-      const holder = document.createElement('div');
-      holder.style.position = 'fixed';
-      holder.style.left = '-9999px';
-      holder.appendChild(clone);
-      document.body.appendChild(holder);
-      const range = document.createRange();
-      range.selectNode(clone);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-      document.execCommand('copy');
-      selection.removeAllRanges();
-      document.body.removeChild(holder);
-    }
-    showToast("화면과 같은 합계 표 양식으로 내보냈습니다.", "success");
+    showToast("색상과 상세 실장도가 포함된 엑셀 파일을 다운로드했습니다.", "success");
   };
 
   const openStatusDrillDown = (statusCode) => {
