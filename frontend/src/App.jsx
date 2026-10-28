@@ -624,11 +624,40 @@ export default function App() {
     const tableDiv = document.getElementById('rack-summary-tables');
     if (tableDiv) {
       const clone = tableDiv.cloneNode(true);
+      clone.querySelectorAll('h3').forEach(el => {
+        el.style.fontSize = '12pt';
+        el.style.fontWeight = '700';
+        el.style.margin = '12px 0 6px';
+        el.style.color = '#1e293b';
+      });
       clone.querySelectorAll('table').forEach(table => {
+        table.style.borderCollapse = 'collapse';
+        table.style.fontSize = '11pt';
+        table.style.fontFamily = 'Calibri, Arial, sans-serif';
+        table.style.width = '100%';
         table.querySelectorAll('th, td').forEach(el => {
+          const cls = el.className || '';
           el.style.fontSize = '11pt';
           el.style.fontFamily = 'Calibri, Arial, sans-serif';
           el.style.border = '1px solid #94a3b8';
+          el.style.padding = '4px 6px';
+          el.style.verticalAlign = 'middle';
+          if (cls.includes('bg-[#ddebf7]') || el.parentElement?.className?.includes('bg-[#ddebf7]')) {
+            el.style.backgroundColor = '#ddebf7';
+            el.style.fontWeight = '700';
+          }
+          if (cls.includes('bg-slate-100')) el.style.backgroundColor = '#f1f5f9';
+          if (cls.includes('text-red-600')) el.style.color = '#dc2626';
+          if (cls.includes('text-emerald-600')) el.style.color = '#059669';
+          if (cls.includes('text-blue-600')) el.style.color = '#2563eb';
+          if (cls.includes('font-bold') || cls.includes('font-black')) el.style.fontWeight = '700';
+          if (cls.includes('text-left')) el.style.textAlign = 'left';
+          else el.style.textAlign = 'center';
+        });
+        table.querySelectorAll('thead th').forEach(el => {
+          el.style.backgroundColor = '#ddebf7';
+          el.style.fontWeight = '700';
+          el.style.color = '#1e293b';
         });
       });
       const holder = document.createElement('div');
