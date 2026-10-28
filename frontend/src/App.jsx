@@ -569,45 +569,66 @@ export default function App() {
   const handleExportExcel = () => {
     if (!selectedRack?.servers?.length) { showToast("내보낼 장비가 없습니다.", "error"); return; }
 
-    const headers = ["Hostname","Model","Status","StartU","SizeU","PowerW","PublicIP","PrivateIP","MgmtIP"];
-    const rows = selectedRack.servers
-      .filter(s => statusFilter === 'ALL' || s.status === statusFilter)
-      .map(s => [
-        s.hostname || "", s.model_name || "", s.status || "", s.start_u || "", s.size_u || "",
-        s.specs?.power_w || "", s.specs?.public_ip || "", s.specs?.private_ip || "", s.specs?.mgmt_ip || s.specs?.ip || ""
-      ]);
-    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(",")).join("\n");
+    const esc = (v) => `"${String(v ?? '').replaceAll('"','""')}"`;
+    const lines = [];
+    const addTable = (title, headers, rows, totalLabel, totalValue) => {
+      lines.push(esc(title));
+      lines.push(headers.map(esc).join(","));
+      rows.forEach(r => lines.push(r.map(esc).join(",")));
+      if (totalLabel) lines.push([esc(""), esc(totalLabel), ...Array(Math.max(0, headers.length - 3)).fill(esc("")), esc(totalValue)].join(","));
+      lines.push("");
+    };
+
+    const powerRows = summaryStats.power.map((item, idx) => [
+      idx === 0 ? "전기" : "",
+      item.model_name,
+      `${item.power_w}W`,
+      item.count,
+      `${item.power_w * item.count}W`,
+    ]);
+    addTable("전기 (Power) 합계", ["구분", "항목 (Model)", "전력(W)", "서버수", "합계(W)"], powerRows, "총 합계", `${summaryStats.power.reduce((s, i) => s + i.power_w * i.count, 0)}W`);
+
+    const pubRows = summaryStats.pubLan.map((item, idx) => [
+      idx === 0 ? "Pub LAN" : "",
+      item.model_name,
+      `${item.pub_lan}ea`,
+      item.count,
+      `${item.pub_lan * item.count}ea`,
+    ]);
+    addTable("Public LAN 할당", ["구분", "항목 (Model)", "LAN(포트)", "서버수", "합계(포트)"], pubRows, "총 합계", `${summaryStats.pubLan.reduce((s, i) => s + i.pub_lan * i.count, 0)}ea`);
+
+    const privRows = summaryStats.privLan.map((item, idx) => [
+      idx === 0 ? "Priv LAN" : "",
+      item.model_name,
+      `${item.priv_lan}ea`,
+      item.count,
+      `${item.priv_lan * item.count}ea`,
+    ]);
+    addTable("Private LAN 할당", ["구분", "항목 (Model)", "LAN(포트)", "서버수", "합계(포트)"], privRows, "총 합계", `${summaryStats.privLan.reduce((s, i) => s + i.priv_lan * i.count, 0)}ea`);
+
+    const ipItems = summaryStats.ip.filter(item => item.pub_ip_count > 0 || item.vip_count > 0);
+    const ipRows = [];
+    ipItems.forEach((item, idx) => {
+      if (item.pub_ip_count > 0) ipRows.push([idx === 0 ? "Public IP" : "", `${item.model_name} (${item.power_w}W)`, `${item.pub_ip_count}ea`]);
+      if (item.vip_count > 0) ipRows.push(["Virtual IP", `${item.model_name} (${item.power_w}W)`, `${item.vip_count}ea`]);
+    });
+    addTable("IP 할당 현황", ["구분", "항목 (Model)", "할당 IP 총계"], ipRows, "총 합계", `${ipItems.reduce((s, i) => s + i.pub_ip_count + i.vip_count, 0)}ea`);
+
+    const csv = lines.join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `${selectedRack.name}-assets.csv`;
+    a.download = `${selectedRack.name}-summary.csv`;
     a.click();
 
     const tableDiv = document.getElementById('rack-summary-tables');
     if (tableDiv) {
       const clone = tableDiv.cloneNode(true);
       clone.querySelectorAll('table').forEach(table => {
-        const trs = Array.from(table.querySelectorAll('tr'));
-        const colCount = Math.max(0, ...trs.map(r => r.children.length));
-        const maxLen = Array(colCount).fill(0);
-        trs.forEach(row => Array.from(row.children).forEach((cell, i) => {
-          const len = (cell.textContent || '').trim().length;
-          if (len > maxLen[i]) maxLen[i] = len;
-        }));
-        const colgroup = document.createElement('colgroup');
-        maxLen.forEach(len => {
-          const col = document.createElement('col');
-          const width = Math.min(420, Math.max(70, len * 9 + 24));
-          col.style.width = `${width}px`;
-          col.setAttribute('width', String(width));
-          colgroup.appendChild(col);
-        });
-        table.insertBefore(colgroup, table.firstChild);
-        table.style.tableLayout = 'fixed';
         table.querySelectorAll('th, td').forEach(el => {
           el.style.fontSize = '11pt';
           el.style.fontFamily = 'Calibri, Arial, sans-serif';
-          el.style.whiteSpace = 'nowrap';
+          el.style.border = '1px solid #94a3b8';
         });
       });
       const holder = document.createElement('div');
@@ -624,7 +645,7 @@ export default function App() {
       selection.removeAllRanges();
       document.body.removeChild(holder);
     }
-    showToast("CSV 다운로드와 엑셀 붙여넣기용 복사를 완료했습니다.", "success");
+    showToast("화면과 같은 합계 표 양식으로 내보냈습니다.", "success");
   };
 
   const openStatusDrillDown = (statusCode) => {
