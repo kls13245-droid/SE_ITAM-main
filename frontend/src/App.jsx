@@ -571,9 +571,33 @@ export default function App() {
     if (!tableDiv) return;
     try {
       const clone = tableDiv.cloneNode(true);
-      clone.querySelectorAll('table, th, td').forEach(el => {
-        el.style.fontSize = '11pt';
-        el.style.fontFamily = 'Calibri, Arial, sans-serif';
+      clone.querySelectorAll('table').forEach(table => {
+        const rows = Array.from(table.querySelectorAll('tr'));
+        const colCount = Math.max(0, ...rows.map(r => r.children.length));
+        const maxLen = Array(colCount).fill(0);
+        rows.forEach(row => {
+          Array.from(row.children).forEach((cell, i) => {
+            const len = (cell.textContent || '').trim().length;
+            if (len > maxLen[i]) maxLen[i] = len;
+          });
+        });
+        const colgroup = document.createElement('colgroup');
+        maxLen.forEach(len => {
+          const col = document.createElement('col');
+          const width = Math.min(420, Math.max(70, len * 9 + 24));
+          col.style.width = `${width}px`;
+          col.setAttribute('width', String(width));
+          colgroup.appendChild(col);
+        });
+        table.insertBefore(colgroup, table.firstChild);
+        table.style.tableLayout = 'fixed';
+        table.style.width = 'auto';
+        table.querySelectorAll('th, td').forEach(el => {
+          el.style.fontSize = '11pt';
+          el.style.fontFamily = 'Calibri, Arial, sans-serif';
+          el.style.whiteSpace = 'nowrap';
+          el.style.height = '18pt';
+        });
       });
       const holder = document.createElement('div');
       holder.style.position = 'fixed';
@@ -588,10 +612,9 @@ export default function App() {
       document.execCommand('copy');
       selection.removeAllRanges();
       document.body.removeChild(holder);
-      showToast("표가 복사되었습니다. 엑셀 글자 크기 11pt", "success");
+      showToast("표가 복사되었습니다. 열 너비는 글자 길이에 맞춰 설정됩니다.", "success");
     } catch (err) { showToast("복사 중 오류가 발생했습니다.", "error"); }
   };
-
 
   const handleDownloadExcel = () => {
     if (!selectedRack?.servers?.length) { showToast("내보낼 장비가 없습니다.", "error"); return; }
