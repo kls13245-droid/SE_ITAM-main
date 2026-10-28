@@ -4,6 +4,8 @@ from . import views
 urlpatterns = [
     # ⭐️ 프론트엔드 로그인 인증 API
     path('api/login/', views.api_login, name='api_login'),
+    path('api/logout/', views.api_logout, name='api_logout'),
+    path('api/me/', views.api_me, name='api_me'),
     
     # 전체 사이트 데이터 로드
     path('api/site-data/', views.api_site_data, name='api_site_data'),

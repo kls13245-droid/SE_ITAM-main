@@ -1,9 +1,20 @@
 import json
+from functools import wraps
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth import authenticate, login, logout
 from .models import Campus, Building, Rack, ServerAsset
 
+def login_required_api(view):
+    @wraps(view)
+    def _wrapped(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({"error": "로그인이 필요합니다."}, status=401)
+        return view(request, *args, **kwargs)
+    return _wrapped
+
 @csrf_exempt
+@login_required_api
 def api_site_data(request):
     data = []
     campuses = Campus.objects.all()
@@ -28,6 +39,7 @@ def api_site_data(request):
     return JsonResponse(data, safe=False)
 
 @csrf_exempt
+@login_required_api
 def add_campus(request):
     if request.method == 'POST':
         try:
@@ -38,6 +50,7 @@ def add_campus(request):
             return JsonResponse({'error': str(e)}, status=400)
 
 @csrf_exempt
+@login_required_api
 def add_building(request):
     if request.method == 'POST':
         try:
@@ -49,6 +62,7 @@ def add_building(request):
             return JsonResponse({'error': str(e)}, status=400)
 
 @csrf_exempt
+@login_required_api
 def add_rack(request):
     if request.method == 'POST':
         try:
@@ -63,6 +77,7 @@ def add_rack(request):
             return JsonResponse({'error': str(e)}, status=400)
 
 @csrf_exempt
+@login_required_api
 def add_server(request):
     if request.method == 'POST':
         try:
@@ -83,6 +98,7 @@ def add_server(request):
             return JsonResponse({'error': str(e)}, status=400)
 
 @csrf_exempt
+@login_required_api
 def update_server(request, server_id):
     if request.method == 'PUT':
         try:
@@ -104,6 +120,7 @@ def update_server(request, server_id):
             return JsonResponse({'error': str(e)}, status=400)
 
 @csrf_exempt
+@login_required_api
 def delete_server(request, server_id):
     if request.method == 'DELETE':
         try:
@@ -115,6 +132,7 @@ def delete_server(request, server_id):
 
 # ⭐️ 신규 업데이트: 극강의 예외 처리가 포함된 이력 조회 API
 @csrf_exempt
+@login_required_api
 def get_server_history(request, server_id):
     try:
         server = ServerAsset.objects.get(id=server_id)
@@ -165,13 +183,6 @@ def get_server_history(request, server_id):
         return JsonResponse({'error': '해당 장비를 찾을 수 없습니다.'}, status=404)
     except Exception as e:
         return JsonResponse({'error': f"서버 내부 오류: {str(e)}"}, status=500)
-from django.contrib.auth import authenticate, login
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-import json
-from django.contrib.auth import authenticate, login
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
 
 @csrf_exempt
 def api_login(request):
@@ -194,3 +205,14 @@ def api_login(request):
             return JsonResponse({'error': str(e)}, status=400)
             
     return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
+
+@csrf_exempt
+def api_logout(request):
+    logout(request)
+    return JsonResponse({"success": True})
+
+@csrf_exempt
+def api_me(request):
+    if request.user.is_authenticated:
+        return JsonResponse({"authenticated": True, "username": request.user.username})
+    return JsonResponse({"authenticated": False}, status=401)

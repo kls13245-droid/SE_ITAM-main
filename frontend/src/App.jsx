@@ -54,11 +54,12 @@ export default function App() {
   });
 
   // ⭐️ 로그인 상태 관리
-  const [isAuthenticated, setIsAuthenticated] = useState(localStorage.getItem('itam_auth') === 'true');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [loginError, setLoginError] = useState('');
 
-  const API_BASE_URL = 'http://192.168.70.250:8000';
+  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://192.168.70.250:8000';
+  const apiFetch = (path, options = {}) => fetch(`${API_BASE_URL}${path}`, { credentials: 'include', ...options });
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
@@ -68,7 +69,7 @@ export default function App() {
   const fetchSiteData = () => {
     setLoading(true);
     setApiError(null);
-    fetch(`${API_BASE_URL}/api/site-data/`) 
+    apiFetch(`/api/site-data/`) 
       .then(res => {
         if (!res.ok) throw new Error('서버 응답 오류');
         return res.json();
@@ -85,11 +86,27 @@ export default function App() {
       });
   };
 
-  useEffect(() => { fetchSiteData(); }, []);
+  useEffect(() => {
+    apiFetch('/api/me/')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.authenticated) {
+          setIsAuthenticated(true);
+          localStorage.setItem('itam_auth', 'true');
+          localStorage.setItem('itam_user', data.username);
+        } else {
+          setIsAuthenticated(false);
+          localStorage.removeItem('itam_auth');
+        }
+      })
+      .catch(() => setIsAuthenticated(false));
+  }, []);
+
+  useEffect(() => { if (isAuthenticated) fetchSiteData(); }, [isAuthenticated]);
 
   const handleLogin = (e) => {
     e.preventDefault();
-    fetch(`${API_BASE_URL}/api/login/`, {
+    apiFetch(`/api/login/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(loginForm)
@@ -109,15 +126,17 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('itam_auth');
-    localStorage.removeItem('itam_user');
-    setIsAuthenticated(false);
+    apiFetch('/api/logout/', { method: 'POST' }).finally(() => {
+      localStorage.removeItem('itam_auth');
+      localStorage.removeItem('itam_user');
+      setIsAuthenticated(false);
+    });
   };
 
   const fetchServerHistory = (serverId) => {
     setLoadingHistory(true);
     setShowHistoryModal(true);
-    fetch(`${API_BASE_URL}/api/server/history/${serverId}/`)
+    apiFetch(`/api/server/history/${serverId}/`)
       .then(async res => {
         let data;
         try {
@@ -310,7 +329,7 @@ export default function App() {
 
   const handleSaveCampus = () => {
     if (!newCampusName.trim()) { showToast("캠퍼스 이름을 입력해주세요.", "error"); return; }
-    fetch(`${API_BASE_URL}/api/campus/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCampusName }) })
+    apiFetch(`/api/campus/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCampusName }) })
     .then(res => { if (!res.ok) throw new Error('저장 실패'); return res.json(); })
     .then(savedCampus => {
       setSiteData([...siteData, { ...savedCampus, buildings: [] }]);
@@ -320,7 +339,7 @@ export default function App() {
 
   const handleSaveBuilding = () => {
     if (!newBuildingName.trim()) { showToast("건물 이름을 입력해주세요.", "error"); return; }
-    fetch(`${API_BASE_URL}/api/building/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campus_id: targetCampusId, name: newBuildingName }) })
+    apiFetch(`/api/building/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campus_id: targetCampusId, name: newBuildingName }) })
     .then(res => { if (!res.ok) throw new Error('저장 실패'); return res.json(); })
     .then(savedBuilding => {
       setSiteData(siteData.map(c => c.id === targetCampusId ? { ...c, buildings: [...(c.buildings || []), { ...savedBuilding, racks: [] }] } : c));
@@ -332,7 +351,7 @@ export default function App() {
   const handleNewRackChange = (field, value) => setNewRackForm(prev => ({ ...prev, [field]: value }));
   const handleSaveRack = () => {
     if (!newRackForm.name.trim()) { showToast("랙 이름을 입력해주세요.", "error"); return; }
-    fetch(`${API_BASE_URL}/api/rack/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...newRackForm, building_id: selectedBuilding.id }) })
+    apiFetch(`/api/rack/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...newRackForm, building_id: selectedBuilding.id }) })
     .then(res => { if (!res.ok) throw new Error('저장 실패'); return res.json(); })
     .then(savedRack => {
       const newRackData = { ...savedRack, servers: [] };
@@ -435,7 +454,7 @@ export default function App() {
     const isNew = !editForm.id;
     const url = isNew ? `${API_BASE_URL}/api/server/add/` : `${API_BASE_URL}/api/server/update/${editForm.id}/`;
     
-    fetch(url, { method: isNew ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...editForm, rack_id: selectedRack.id }) })
+    apiFetch(url.replace(API_BASE_URL, ''), { method: isNew ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...editForm, rack_id: selectedRack.id }) })
     .then(res => { if (!res.ok) throw new Error('저장 실패'); return res.json(); })
     .then(savedData => {
       const completeData = { ...editForm, ...savedData };
@@ -446,7 +465,7 @@ export default function App() {
 
   const handleDelete = () => {
     if(!window.confirm(`[${selectedServer.hostname}] 장비를 영구 삭제하시겠습니까?`)) return;
-    fetch(`${API_BASE_URL}/api/server/delete/${selectedServer.id}/`, { method: 'DELETE' })
+    apiFetch(`/api/server/delete/${selectedServer.id}/`, { method: 'DELETE' })
     .then(res => {
       if(!res.ok) throw new Error("삭제 실패");
       const updatedSiteData = siteData.map(c => ({ 
@@ -480,7 +499,7 @@ export default function App() {
     }
     
     const updatedServer = { ...serverToMove, start_u: targetU };
-    fetch(`${API_BASE_URL}/api/server/update/${serverToMove.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedServer) })
+    apiFetch(`/api/server/update/${serverToMove.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedServer) })
     .then(res => {
       if (!res.ok) throw new Error('이동 실패');
       updateLocalState(updatedServer, false); showToast("장비 위치가 이동되었습니다.", "success");
