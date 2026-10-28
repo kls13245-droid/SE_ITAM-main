@@ -570,10 +570,25 @@ export default function App() {
     const tableDiv = document.getElementById('rack-summary-tables');
     if (!tableDiv) return;
     try {
-      const range = document.createRange(); range.selectNode(tableDiv);
-      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-      document.execCommand('copy'); selection.removeAllRanges();
-      showToast("표가 클립보드에 복사되었습니다. (Ctrl+V)", "success");
+      const clone = tableDiv.cloneNode(true);
+      clone.querySelectorAll('table, th, td').forEach(el => {
+        el.style.fontSize = '11pt';
+        el.style.fontFamily = 'Calibri, Arial, sans-serif';
+      });
+      const holder = document.createElement('div');
+      holder.style.position = 'fixed';
+      holder.style.left = '-9999px';
+      holder.appendChild(clone);
+      document.body.appendChild(holder);
+      const range = document.createRange();
+      range.selectNode(clone);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand('copy');
+      selection.removeAllRanges();
+      document.body.removeChild(holder);
+      showToast("표가 복사되었습니다. 엑셀 글자 크기 11pt", "success");
     } catch (err) { showToast("복사 중 오류가 발생했습니다.", "error"); }
   };
 
