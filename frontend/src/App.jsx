@@ -10,6 +10,7 @@ import RackDiagram from './components/RackDiagram';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
+import ServerForm from './components/ServerForm';
 import { apiFetch, API_BASE_URL } from './api/client';
 
 export default function App() {
@@ -26,6 +27,7 @@ export default function App() {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
 
   const [activePort, setActivePort] = useState(null);
   const [portInputValue, setPortInputValue] = useState('');
@@ -214,7 +216,8 @@ export default function App() {
     if (!selectedRack || !selectedRack.servers) return { power: [], pubLan: [], privLan: [], ip: [] };
     const powerMap = {}; const pubLanMap = {}; const privLanMap = {}; const ipMap = {};
 
-    selectedRack.servers.forEach(s => {
+    const visible = statusFilter === 'ALL' ? selectedRack.servers : selectedRack.servers.filter(s => s.status === statusFilter);
+    visible.forEach(s => {
       const model = s.model_name || '기종 미상';
       const power = Number(s.specs?.power_w) || 0;
       const pubLan = Number(s.specs?.public_lan) || 0;
@@ -256,13 +259,14 @@ export default function App() {
       privLan: Object.values(privLanMap),
       ip: Object.values(ipMap)
     };
-  }, [selectedRack]);
+  }, [selectedRack, statusFilter]);
 
   // ⭐️ 메인 상세 실장도 전체 합계 계산 로직
   const detailedTotals = useMemo(() => {
     if (!selectedRack || !selectedRack.servers) return { power: 0, current: 0, lan: 0, pip: 0, vip: 0, priv: 0 };
     let power = 0, lan = 0, pip = 0, vip = 0, priv = 0;
-    selectedRack.servers.forEach(s => {
+    const visible = statusFilter === 'ALL' ? selectedRack.servers : selectedRack.servers.filter(s => s.status === statusFilter);
+    visible.forEach(s => {
       power += Number(s.specs?.power_w) || 0;
       lan += Number(s.specs?.public_lan) || 0;
       priv += Number(s.specs?.private_lan) || 0;
@@ -270,13 +274,13 @@ export default function App() {
       if (s.specs?.virtual_ip?.trim()) vip += s.specs.virtual_ip.split(',').filter(x => x.trim()).length;
     });
     return { power, current: power / 220, lan, pip, vip, priv };
-  }, [selectedRack]);
+  }, [selectedRack, statusFilter]);
 
   const rackTableRows = useMemo(() => {
     if (!selectedRack) return [];
     const rows = [];
     const totalU = selectedRack.total_u_space || 42;
-    const servers = selectedRack.servers || [];
+    const servers = (selectedRack.servers || []).filter(s => statusFilter === 'ALL' || s.status === statusFilter);
 
     for (let u = totalU; u >= 1; u--) {
       const serverHere = servers.find(s => u >= s.start_u && u < s.start_u + (s.size_u || 1));
@@ -288,7 +292,7 @@ export default function App() {
       }
     }
     return rows;
-  }, [selectedRack]);
+  }, [selectedRack, statusFilter]);
 
   const goHome = () => { setSelectedBuilding(null); setSelectedRack(null); setSelectedServer(null); setIsEditing(false); setSearchTerm(''); setActivePort(null); };
   const handleCampusClick = (campusId) => setExpandedCampus(expandedCampus === campusId ? null : campusId);
@@ -573,6 +577,23 @@ export default function App() {
     } catch (err) { showToast("복사 중 오류가 발생했습니다.", "error"); }
   };
 
+
+  const handleDownloadExcel = () => {
+    if (!selectedRack?.servers?.length) { showToast("내보낼 장비가 없습니다.", "error"); return; }
+    const headers = ["Hostname","Model","Status","StartU","SizeU","PowerW","PublicIP","PrivateIP","MgmtIP"];
+    const rows = selectedRack.servers.map(s => [
+      s.hostname || "", s.model_name || "", s.status || "", s.start_u || "", s.size_u || "",
+      s.specs?.power_w || "", s.specs?.public_ip || "", s.specs?.private_ip || "", s.specs?.mgmt_ip || s.specs?.ip || ""
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${selectedRack.name}-assets.csv`;
+    a.click();
+    showToast("엑셀(CSV) 파일을 다운로드했습니다.", "success");
+  };
+
   const openStatusDrillDown = (statusCode) => {
     const list = [];
     siteData.forEach(c => c.buildings?.forEach(b => b.racks?.forEach(r => r.servers?.forEach(s => {
@@ -601,6 +622,12 @@ export default function App() {
     return <Server size={size} className={className} />;
   };
   
+  const statusFilteredServers = useMemo(() => {
+    const servers = selectedRack?.servers || [];
+    if (statusFilter === 'ALL') return servers;
+    return servers.filter(s => s.status === statusFilter);
+  }, [selectedRack, statusFilter]);
+
   const filteredServers = useMemo(() => {
     if (!selectedRack || !searchTerm) return selectedRack?.servers || [];
     const term = searchTerm.toLowerCase();
@@ -789,12 +816,20 @@ export default function App() {
                     <div className="flex items-center justify-between border-b border-slate-200 pb-3 mb-4 shrink-0">
                       <h2 className="text-xl font-bold text-slate-800 flex items-center"><List className="text-blue-500 mr-2" size={20} /> 랙 자산 및 자원 할당 명세서</h2>
                       <div className="flex items-center gap-2">
-                        <button onClick={handleCopyExcelData} className="px-3 py-1.5 flex items-center bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold transition-colors shadow-sm" title="표 내용을 복사하여 엑셀에 붙여넣기"><Copy size={14} className="mr-1.5" /> 엑셀 표 통째로 복사</button>
-                        <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full shadow-inner border border-slate-200">총 실장 장비: {selectedRack.servers?.length || 0}대</span>
+                        <button onClick={handleCopyExcelData} className="px-3 py-1.5 flex items-center bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold transition-colors shadow-sm" title="표 내용을 복사하여 엑셀에 붙여넣기"><Copy size={14} className="mr-1.5" /> 표 복사</button>
+                        <button onClick={handleDownloadExcel} className="px-3 py-1.5 flex items-center bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-lg text-xs font-bold transition-colors shadow-sm"><Copy size={14} className="mr-1.5" /> CSV 다운로드</button>
+                        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
+                          <option value="ALL">전체 상태</option>
+                          <option value="OPER">OPER</option>
+                          <option value="MAINT">MAINT</option>
+                          <option value="IDLE">IDLE</option>
+                          <option value="WAIT">WAIT</option>
+                        </select>
+                        <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full shadow-inner border border-slate-200">총 실장 장비: {statusFilteredServers.length}대</span>
                       </div>
                     </div>
 
-                    {selectedRack.servers?.length === 0 ? (
+                    {statusFilteredServers.length === 0 ? (
                       <div className="flex-1 flex flex-col items-center justify-center text-slate-400 text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
                         <Server size={48} className="mb-4 opacity-20 text-blue-500" />
                         <p className="text-lg font-bold text-slate-600">이 랙은 비어 있습니다.</p>
@@ -955,109 +990,21 @@ export default function App() {
                     )}
                   </div>
                 ) : isEditing ? (
-                  <div className="animate-in fade-in slide-in-from-right-4 duration-300">
-                    <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-200">
-                      <h2 className="text-2xl font-bold text-slate-800 flex items-center">{editForm.id ? <><Edit size={24} className="mr-2 text-blue-600"/> 장비 정보 수정</> : <><Plus size={24} className="mr-2 text-emerald-600"/> 신규 장비 실장</>}</h2>
-                      <div className="flex gap-2">
-                        <button onClick={handleCancelEdit} className="px-4 py-2 flex items-center text-sm font-bold bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-slate-50 transition shadow-sm"><X size={16} className="mr-1"/> 취소</button>
-                        <button onClick={handleSave} className="px-4 py-2 flex items-center text-sm font-bold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition shadow-md"><Save size={16} className="mr-1"/> DB에 저장</button>
-                      </div>
-                    </div>
-
-                    <div className="mb-6 p-4 bg-blue-50/50 border border-blue-100 rounded-xl flex justify-between items-center">
-                      <div>
-                        <span className="text-xs font-bold text-blue-700 uppercase tracking-widest flex items-center mb-1"><Save size={14} className="mr-1"/> 템플릿(프리셋) 관리</span>
-                        <p className="text-xs text-slate-500">자주 쓰는 장비 제원을 템플릿으로 등록하여 빠르게 불러오세요.</p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button onClick={handleSavePreset} className="bg-white border border-blue-200 text-blue-600 px-3 py-1.5 rounded text-xs font-bold hover:bg-blue-50 transition-colors shadow-sm">현재 입력값으로 템플릿 생성</button>
-                      </div>
-                    </div>
-                    
-                    {Object.keys(presets).length > 0 && (
-                      <div className="mb-6 flex gap-2 overflow-x-auto pb-2">
-                        {Object.keys(presets).map(pName => (
-                          <div key={pName} className="flex items-center bg-blue-600 text-white rounded-full shadow-sm text-xs font-bold shrink-0">
-                            <button onClick={() => handleLoadPreset(pName)} className="px-3 py-1.5 hover:bg-blue-500 rounded-l-full transition-colors flex items-center" title="이 템플릿 제원 불러오기"><Copy size={12} className="mr-1.5 opacity-80" /> {pName}</button>
-                            <button onClick={(e) => handleDeletePreset(e, pName)} className="px-2 py-1.5 bg-blue-700 hover:bg-red-500 rounded-r-full transition-colors" title="템플릿 삭제"><X size={12} /></button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    
-                    <div className="mb-6 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                      <label className="block text-xs font-bold text-slate-700 mb-2">자산 유형 (Asset Type) 선택</label>
-                      <div className="flex gap-4">
-                        <label className={`flex-1 flex items-center justify-center p-3 rounded-lg border-2 cursor-pointer transition-all ${editForm.specs?.asset_type === 'server' || !editForm.specs?.asset_type ? 'border-blue-500 bg-blue-50 text-blue-700 font-bold shadow-sm' : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'}`}>
-                          <input type="radio" name="asset_type" value="server" className="hidden" checked={editForm.specs?.asset_type === 'server' || !editForm.specs?.asset_type} onChange={(e) => handleFormChange(e, 'asset_type', true)} />
-                          <Server size={18} className="mr-2" /> 서버 (Server)
-                        </label>
-                        <label className={`flex-1 flex items-center justify-center p-3 rounded-lg border-2 cursor-pointer transition-all ${editForm.specs?.asset_type === 'storage' ? 'border-indigo-500 bg-indigo-50 text-indigo-700 font-bold shadow-sm' : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'}`}>
-                          <input type="radio" name="asset_type" value="storage" className="hidden" checked={editForm.specs?.asset_type === 'storage'} onChange={(e) => handleFormChange(e, 'asset_type', true)} />
-                          <Database size={18} className="mr-2" /> 스토리지 (Storage)
-                        </label>
-                        <label className={`flex-1 flex items-center justify-center p-3 rounded-lg border-2 cursor-pointer transition-all ${editForm.specs?.asset_type === 'switch' ? 'border-emerald-500 bg-emerald-50 text-emerald-700 font-bold shadow-sm' : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'}`}>
-                          <input type="radio" name="asset_type" value="switch" className="hidden" checked={editForm.specs?.asset_type === 'switch'} onChange={(e) => handleFormChange(e, 'asset_type', true)} />
-                          <Network size={18} className="mr-2" /> 스위치 (Switch)
-                        </label>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-5 mb-6">
-                      <div className="col-span-2 sm:col-span-1 flex gap-2"><div className="w-1/2"><label className="block text-xs font-bold text-slate-700 mb-1">시작 위치 (U) <span className="text-red-500">*</span></label><input type="number" value={editForm.start_u || ''} onChange={(e) => handleFormChange(e, 'start_u')} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="예: 32" /></div><div className="w-1/2"><label className="block text-xs font-bold text-slate-700 mb-1">장비 높이 (Size) <span className="text-red-500">*</span></label><input type="number" min="1" value={editForm.size_u || 1} onChange={(e) => handleFormChange(e, 'size_u')} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="예: 2" /></div></div>
-                      <div className="col-span-2 sm:col-span-1"><label className="block text-xs font-bold text-slate-700 mb-1">Hostname <span className="text-red-500">*</span></label><input type="text" value={editForm.hostname || ''} onChange={(e) => handleFormChange(e, 'hostname')} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="예: kr-gh-nrdk-db01" /></div>
-                      <div className="col-span-2 sm:col-span-1"><label className="block text-xs font-bold text-slate-700 mb-1">모델명 (Model)</label><input type="text" list="model-list" value={editForm.model_name || ''} onChange={(e) => handleFormChange(e, 'model_name')} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="예: Dell PowerEdge R650" /></div>
-                      
-                      {/* ⭐️ OS Version을 무적의 specs 로 저장 */}
-                      <div className="col-span-2 sm:col-span-1"><label className="block text-xs font-bold text-slate-700 mb-1">OS Version</label><input type="text" value={editForm.specs?.os_version || editForm.os_version || ''} onChange={(e) => handleFormChange(e, 'os_version', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="예: Ubuntu 22.04 LTS" /></div>
-                      
-                      <div className="col-span-2 sm:col-span-1 flex gap-4"><div className="flex-1"><label className="block text-xs font-bold text-slate-700 mb-1">운영 상태 <span className="text-red-500">*</span></label><select value={editForm.status || 'WAIT'} onChange={(e) => handleFormChange(e, 'status')} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-shadow font-bold"><option value="WAIT">입고/셋업 대기 (WAIT)</option><option value="OPER">정상 운영 (OPER)</option><option value="MAINT">장애/수리 (MAINT)</option><option value="IDLE">유휴/폐기 (IDLE)</option></select></div><div className="flex-1"><label className="block text-xs font-bold text-slate-700 mb-1">도입 년도</label><input type="text" value={editForm.setup_year || ''} onChange={(e) => handleFormChange(e, 'setup_year')} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-shadow" placeholder="예: 2024" /></div></div>
-                      
-                      {editForm.specs?.asset_type !== 'switch' && (
-                        <div className="col-span-2"><label className="block text-xs font-bold text-slate-700 mb-1">자산 용도 / 비고 (설명)</label><input type="text" value={editForm.description || ''} onChange={(e) => handleFormChange(e, 'description')} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-shadow placeholder-slate-300" placeholder="장비의 주요 용도를 적어주세요." /></div>
-                      )}
-                    </div>
-                    
-                    {editForm.specs?.asset_type === 'switch' ? (
-                      <>
-                        <h3 className="font-bold text-slate-800 mb-3 border-b border-slate-200 pb-2 flex items-center"><Network size={18} className="mr-2 text-emerald-500"/> 스위치 기본 정보 및 포트 매핑 (Port Mapping)</h3>
-                        <div className="grid grid-cols-2 gap-4 bg-slate-50/50 p-5 rounded-xl border border-slate-200 shadow-inner mb-6">
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Management IP</label><input type="text" value={editForm.specs?.mgmt_ip || editForm.specs?.ip || ''} onChange={(e) => handleFormChange(e, 'mgmt_ip', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono" placeholder="예: 10.1.2.3" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Serial Number (S/N)</label><input type="text" value={editForm.specs?.serial_number || ''} onChange={(e) => handleFormChange(e, 'serial_number', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono" placeholder="예: SN-12345ABC" /></div>
-                        </div>
-
-                        <div className="mb-2"><span className="text-sm font-bold text-slate-700">포트 시각화 매핑 (포트를 클릭하여 연결된 서버를 할당하세요)</span></div>
-                        {renderSwitchPorts(editForm.specs?.switch_ports || {}, true)}
-                      </>
-                    ) : (
-                      <>
-                        <h3 className="font-bold text-slate-800 mb-3 border-b border-slate-200 pb-2 flex items-center"><Activity size={18} className="mr-2 text-blue-500"/> 상세 제원 및 자원 할당</h3>
-                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-50/50 p-5 rounded-xl border border-slate-200 shadow-inner">
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">CPU</label><input type="text" list="cpu-list" value={editForm.specs?.cpu || ''} onChange={(e) => handleFormChange(e, 'cpu', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="예: Intel Xeon Silver" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Memory (RAM)</label><input type="text" list="ram-list" value={editForm.specs?.ram || ''} onChange={(e) => handleFormChange(e, 'ram', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="예: 128GB" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Storage (Disk)</label><input type="text" value={editForm.specs?.storage || ''} onChange={(e) => handleFormChange(e, 'storage', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="예: 1.92TB NVMe x2" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">GPU / 가속기</label><input type="text" list="gpu-list" value={editForm.specs?.gpu || ''} onChange={(e) => handleFormChange(e, 'gpu', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" /></div>
-                          
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">전력 소모량 (W)</label><input type="number" value={editForm.specs?.power_w || ''} onChange={(e) => handleFormChange(e, 'power_w', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="예: 1200" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Public LAN (포트 수)</label><input type="number" value={editForm.specs?.public_lan || ''} onChange={(e) => handleFormChange(e, 'public_lan', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="예: 2" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Private LAN (포트 수)</label><input type="number" value={editForm.specs?.private_lan || ''} onChange={(e) => handleFormChange(e, 'private_lan', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="예: 2" /></div>
-
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Public IP</label><input type="text" value={editForm.specs?.public_ip || ''} onChange={(e) => handleFormChange(e, 'public_ip', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono" placeholder="예: 100.100.181.2" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Virtual IP</label><input type="text" value={editForm.specs?.virtual_ip || ''} onChange={(e) => handleFormChange(e, 'virtual_ip', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono" placeholder="예: 100.100.180.1" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Private IP</label><input type="text" value={editForm.specs?.private_ip || ''} onChange={(e) => handleFormChange(e, 'private_ip', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono" placeholder="예: 192.168.90.71" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">MGMT IP (iDRAC 등)</label><input type="text" value={editForm.specs?.mgmt_ip || editForm.specs?.ip || ''} onChange={(e) => handleFormChange(e, 'mgmt_ip', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono" placeholder="예: 192.168.1.10" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">Serial Number (S/N)</label><input type="text" value={editForm.specs?.serial_number || ''} onChange={(e) => handleFormChange(e, 'serial_number', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono" placeholder="예: SN-12345ABC" /></div>
-
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">상단 L2 스위치</label><input type="text" value={editForm.specs?.l2_switch || ''} onChange={(e) => handleFormChange(e, 'l2_switch', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="예: SW-L2-01" /></div>
-                          <div><label className="block text-xs font-bold text-slate-600 mb-1">상단 SAN 스위치</label><input type="text" value={editForm.specs?.san_switch || ''} onChange={(e) => handleFormChange(e, 'san_switch', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="예: SW-SAN-01" /></div>
-                          
-                          <div className="md:col-span-2 lg:col-span-1"><label className="block text-xs font-bold text-slate-600 mb-1">하단 SAN 스위치</label><input type="text" value={editForm.specs?.bottom_san_switch || ''} onChange={(e) => handleFormChange(e, 'bottom_san_switch', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono" placeholder="예: SW-SAN-02" /></div>
-                          {/* ⭐️ 볼륨 마운트 입력칸 (와이드 배치) */}
-                          <div className="col-span-2 lg:col-span-3"><label className="block text-xs font-bold text-slate-600 mb-1">볼륨 마운트 (Volume Mount)</label><input type="text" value={editForm.specs?.volume_mount || ''} onChange={(e) => handleFormChange(e, 'volume_mount', true)} className="w-full border border-slate-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono text-blue-700" placeholder="예: /data, /backup" /></div>
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  <ServerForm
+                    editForm={editForm}
+                    presets={presets}
+                    activePort={activePort}
+                    portInputValue={portInputValue}
+                    setPortInputValue={setPortInputValue}
+                    onCancel={handleCancelEdit}
+                    onSave={handleSave}
+                    onFormChange={handleFormChange}
+                    onSavePreset={handleSavePreset}
+                    onLoadPreset={handleLoadPreset}
+                    onDeletePreset={handleDeletePreset}
+                    onPortSave={handlePortSave}
+                    renderSwitchPorts={renderSwitchPorts}
+                  />
                 ) : (
                   <div className="animate-in fade-in slide-in-from-right-4 duration-300 flex flex-col h-full">
                     <div className="flex justify-between items-start mb-6">
