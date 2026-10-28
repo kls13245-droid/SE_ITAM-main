@@ -276,15 +276,20 @@ def delete_rack(request, rack_id):
     Rack.objects.get(id=rack_id).delete()
     return JsonResponse({'message': 'Deleted'})
 
-MODEL_SIZE_MAP = {
-    "DL360": 1, "DL380": 2, "DL20": 1, "R650": 1, "R750": 2, "R2500": 1,
-    "MDS-9148": 1, "CP2500": 1, "KVM": 1, "S4148": 1, "EF300": 2,
-}
+MODEL_SIZE_MAP = [
+    ("R760XA", 2), ("R760", 2), ("R660XS", 1), ("R660", 1), ("R7715", 2), ("R470", 1), ("R360", 1),
+    ("DL380", 2), ("DL360", 1), ("DL320", 1), ("DL20", 1),
+    ("A400", 4), ("A250", 2), ("FAS2820", 2), ("FAS7200", 6),
+    ("UNITY380", 2), ("POWERSCALE", 2), ("H700", 2), ("X20", 3),
+    ("MDS9148", 1), ("MDS9132", 1), ("S5148", 1), ("S4148", 1), ("S5248", 1), ("S3248", 1),
+    ("JL814A", 1), ("7010TX", 1), ("7050SX", 1), ("THUNDER", 1), ("CL5716", 1),
+    ("R650", 1), ("R750", 2), ("R2500", 1), ("EF300", 2), ("KVM", 1),
+]
 
 def guess_size_u(model_name):
-    name = (model_name or "").upper()
-    for key, size in MODEL_SIZE_MAP.items():
-        if key.upper() in name:
+    name = (model_name or "").upper().replace(" ", "").replace("-", "").replace("_", "")
+    for key, size in MODEL_SIZE_MAP:
+        if key in name:
             return size
     return 1
 
