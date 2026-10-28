@@ -58,7 +58,7 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [loginError, setLoginError] = useState('');
 
-  const API_BASE_URL = 'http://192.168.70.248:8000';
+  const API_BASE_URL = 'http://192.168.70.250:8000';
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
