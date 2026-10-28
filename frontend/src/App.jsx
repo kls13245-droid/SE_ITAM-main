@@ -7,6 +7,10 @@ import {
   LogOut, Lock, User as UserIcon
 } from 'lucide-react';
 import RackDiagram from './components/RackDiagram';
+import Login from './components/Login';
+import Sidebar from './components/Sidebar';
+import Dashboard from './components/Dashboard';
+import { apiFetch, API_BASE_URL } from './api/client';
 
 export default function App() {
   const [siteData, setSiteData] = useState([]);
@@ -58,9 +62,7 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [loginError, setLoginError] = useState('');
 
-  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://192.168.70.250:8000';
-  const apiFetch = (path, options = {}) => fetch(`${API_BASE_URL}${path}`, { credentials: 'include', ...options });
-
+  
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -658,57 +660,14 @@ export default function App() {
     );
   };
 
-  // ⭐️ 로그인 화면 (인증되지 않았을 때만 렌더링)
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans relative overflow-hidden">
-        <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-blue-600/20 rounded-full blur-3xl"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-emerald-600/10 rounded-full blur-3xl"></div>
-        
-        <div className="bg-slate-800 border border-slate-700 p-10 rounded-2xl shadow-2xl w-full max-w-md relative z-10 animate-in fade-in slide-in-from-bottom-8 duration-500">
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-900 border border-slate-700 mb-4 shadow-inner">
-              <Server size={32} className="text-blue-500" />
-            </div>
-            <h1 className="text-3xl font-black text-white tracking-wider">
-              <span className="text-orange-500">MIRERO</span> ITAM
-            </h1>
-            <p className="text-slate-400 text-sm mt-2 font-medium tracking-wide">IT Asset Management System</p>
-          </div>
-
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Username</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <UserIcon size={18} className="text-slate-500" />
-                </div>
-                <input type="text" value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg py-3 pl-10 pr-4 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all" placeholder="관리자 아이디" required />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Password</label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock size={18} className="text-slate-500" />
-                </div>
-                <input type="password" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg py-3 pl-10 pr-4 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all" placeholder="비밀번호" required />
-              </div>
-            </div>
-            
-            {loginError && (
-              <div className="bg-red-500/10 border border-red-500/50 text-red-400 text-sm p-3 rounded-lg flex items-center font-bold">
-                <AlertTriangle size={16} className="mr-2 shrink-0" />
-                {loginError}
-              </div>
-            )}
-
-            <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-lg shadow-lg hover:shadow-blue-600/20 transition-all flex items-center justify-center group mt-4">
-              시스템 로그인 <ArrowRight size={18} className="ml-2 opacity-70 group-hover:translate-x-1 transition-transform" />
-            </button>
-          </form>
-        </div>
-      </div>
+      <Login
+        loginForm={loginForm}
+        setLoginForm={setLoginForm}
+        loginError={loginError}
+        onSubmit={handleLogin}
+      />
     );
   }
 
@@ -727,68 +686,30 @@ export default function App() {
       )}
 
       {/* Sidebar Navigation */}
-      <div className="w-72 bg-slate-900 text-slate-300 flex flex-col shadow-xl z-10 shrink-0">
-        <div className="p-5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-          <div className="cursor-pointer hover:bg-slate-900 transition-colors flex-1" onClick={goHome} title="처음 화면으로">
-            <h1 className="text-xl font-bold text-white tracking-wider flex items-center"><span className="text-orange-500 mr-1">MIRERO</span> ITAM</h1>
-            <p className="text-xs text-slate-500 mt-1">Asset Management</p>
-          </div>
-          <button onClick={handleLogout} className="p-2 hover:bg-slate-800 rounded-lg text-slate-500 hover:text-red-400 transition-colors group" title="로그아웃">
-            <LogOut size={20} className="group-hover:-translate-x-0.5 transition-transform" />
-          </button>
-        </div>
-        <div className="overflow-y-auto flex-1 p-3">
-          <div className="text-xs font-semibold text-slate-500 mb-3 px-2 uppercase tracking-widest flex justify-between items-center group">
-            <span>Site Topology</span>
-            <div className="flex items-center gap-1.5">
-              <button onClick={() => setIsAddingCampus(true)} className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors" title="새 캠퍼스/사이트 추가"><Plus size={14}/></button>
-              <button onClick={fetchSiteData} className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors" title="새로고침"><RefreshCw size={14} className={loading ? 'animate-spin text-blue-400' : ''} /> </button>
-            </div>
-          </div>
-
-          {isAddingCampus && (
-            <div className="mb-2 p-2 bg-slate-800 rounded flex gap-2 animate-in fade-in slide-in-from-top-2">
-              <input type="text" value={newCampusName} onChange={(e)=>setNewCampusName(e.target.value)} placeholder="캠퍼스 이름" className="flex-1 bg-slate-900 text-white text-sm px-2 py-1 rounded outline-none border border-slate-700" autoFocus onKeyDown={(e) => { if(e.key==='Enter') handleSaveCampus(); }}/>
-              <button onClick={handleSaveCampus} className="text-emerald-400 hover:text-emerald-300"><CheckCircle size={16}/></button>
-              <button onClick={() => { setIsAddingCampus(false); setNewCampusName(''); }} className="text-slate-500 hover:text-slate-300"><X size={16}/></button>
-            </div>
-          )}
-
-          {loading ? <div className="text-center p-4 text-slate-500 text-sm animate-pulse">데이터 동기화 중...</div> : siteData.length === 0 ? <div className="text-center p-4 text-slate-500 text-sm">등록된 사이트가 없습니다.</div> : siteData.map(campus => (
-            <div key={campus.id} className="mb-1">
-              <div className="w-full flex items-center justify-between p-2 rounded hover:bg-slate-800 transition-colors group">
-                <button onClick={() => handleCampusClick(campus.id)} className="flex-1 flex items-center text-left">
-                  {expandedCampus === campus.id ? <FolderOpen size={18} className="text-blue-400 mr-2 shrink-0" /> : <Folder size={18} className="text-slate-500 mr-2 shrink-0" />}
-                  <span className={`truncate ${expandedCampus === campus.id ? 'text-white font-medium' : ''}`}>{campus.name}</span>
-                </button>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => { setTargetCampusId(campus.id); setIsAddingBuilding(true); setExpandedCampus(campus.id); }} className="text-slate-400 hover:text-white p-0.5 rounded"><Plus size={14}/></button>
-                  {campus.buildings && campus.buildings.length > 0 && <ChevronRight size={14} className={`transition-transform ${expandedCampus === campus.id ? 'rotate-90 text-slate-400' : 'text-slate-600'}`} onClick={() => handleCampusClick(campus.id)} />}
-                </div>
-              </div>
-              
-              {expandedCampus === campus.id && (
-                <div className="ml-6 mt-1 border-l border-slate-700 pl-2">
-                  {isAddingBuilding && targetCampusId === campus.id && (
-                    <div className="mb-1 p-1 bg-slate-800 rounded flex gap-1 animate-in fade-in slide-in-from-top-2">
-                      <input type="text" value={newBuildingName} onChange={(e)=>setNewBuildingName(e.target.value)} placeholder="건물 이름" className="flex-1 w-full bg-slate-900 text-white text-xs px-2 py-1 rounded outline-none border border-slate-700" autoFocus onKeyDown={(e) => { if(e.key==='Enter') handleSaveBuilding(); }}/>
-                      <button onClick={handleSaveBuilding} className="text-emerald-400 hover:text-emerald-300"><CheckCircle size={14}/></button>
-                      <button onClick={() => { setIsAddingBuilding(false); setNewBuildingName(''); setTargetCampusId(null); }} className="text-slate-500 hover:text-slate-300"><X size={14}/></button>
-                    </div>
-                  )}
-
-                  {campus.buildings?.map(building => (
-                    <button key={building.id} onClick={() => handleBuildingClick(building, campus)} className={`w-full flex items-center p-2 rounded mb-1 transition-colors ${selectedBuilding?.id === building.id ? 'bg-blue-600/20 text-blue-400 font-medium' : 'hover:bg-slate-800 text-sm'}`}>
-                      <Building size={14} className="mr-2 opacity-70 shrink-0" />
-                      <span className="truncate">{building.name}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+      <Sidebar
+        siteData={siteData}
+        loading={loading}
+        expandedCampus={expandedCampus}
+        selectedBuilding={selectedBuilding}
+        isAddingCampus={isAddingCampus}
+        newCampusName={newCampusName}
+        setNewCampusName={setNewCampusName}
+        isAddingBuilding={isAddingBuilding}
+        newBuildingName={newBuildingName}
+        setNewBuildingName={setNewBuildingName}
+        targetCampusId={targetCampusId}
+        onGoHome={goHome}
+        onLogout={handleLogout}
+        onRefresh={fetchSiteData}
+        onStartAddCampus={() => setIsAddingCampus(true)}
+        onSaveCampus={handleSaveCampus}
+        onCancelCampus={() => { setIsAddingCampus(false); setNewCampusName(''); }}
+        onCampusClick={handleCampusClick}
+        onStartAddBuilding={(id) => { setTargetCampusId(id); setIsAddingBuilding(true); setExpandedCampus(id); }}
+        onSaveBuilding={handleSaveBuilding}
+        onCancelBuilding={() => { setIsAddingBuilding(false); setNewBuildingName(''); setTargetCampusId(null); }}
+        onBuildingClick={handleBuildingClick}
+      />
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
@@ -826,89 +747,7 @@ export default function App() {
         <main className="flex-1 overflow-y-auto bg-slate-50 p-6 flex relative z-0">
           
           {!selectedBuilding ? (
-            <div className="flex-1 flex flex-col gap-6 animate-in fade-in duration-300 max-w-7xl mx-auto w-full">
-              <div className="flex items-end justify-between mb-2">
-                <div>
-                  <h2 className="text-2xl font-bold text-slate-800 tracking-tight">
-                    <span className="text-orange-500">MIRERO</span> 전체 INFRA 현황 DASHBOARD
-                  </h2>
-                  <p className="text-slate-500 text-sm mt-1">전사 IT 자산 및 랙(Rack) 실장 상태를 한눈에 모니터링합니다.</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group">
-                  <h3 className="text-slate-500 text-sm font-bold mb-1 flex items-center"><Server size={16} className="mr-1.5 text-blue-500"/> 전체 등록 서버</h3>
-                  <div className="flex items-baseline gap-2"><span className="text-4xl font-black text-slate-800">{dashboardStats.totalServers}</span><span className="text-sm font-medium text-slate-500">대</span></div>
-                </div>
-                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group">
-                  <h3 className="text-slate-500 text-sm font-bold mb-1 flex items-center"><CheckCircle size={16} className="mr-1.5 text-emerald-500"/> 정상 가동률</h3>
-                  <div className="flex items-baseline gap-2"><span className="text-4xl font-black text-slate-800">{dashboardStats.operRate}</span><span className="text-sm font-medium text-slate-500">%</span></div>
-                  <div className="mt-3 w-full bg-slate-100 h-1.5 rounded-full overflow-hidden"><div className="bg-emerald-500 h-full" style={{ width: `${dashboardStats.operRate}%` }}></div></div>
-                </div>
-                
-                <div onClick={() => dashboardStats.waitCount > 0 && openStatusDrillDown('WAIT')} className={`bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group transition-all ${dashboardStats.waitCount > 0 ? 'cursor-pointer hover:border-amber-300 hover:shadow-md' : ''}`}>
-                  <h3 className="text-slate-500 text-sm font-bold mb-1 flex items-center"><Clock size={16} className="mr-1.5 text-amber-500"/> 셋업 대기 자산</h3>
-                  <div className="flex items-baseline gap-2"><span className={`text-4xl font-black ${dashboardStats.waitCount > 0 ? 'text-amber-500 group-hover:text-amber-600' : 'text-slate-800'}`}>{dashboardStats.waitCount}</span><span className="text-sm font-medium text-slate-500">건</span></div>
-                  {dashboardStats.waitCount > 0 && <div className="mt-2 text-xs font-bold text-amber-600 bg-amber-50 inline-block px-2 py-1 rounded">셋업이 필요합니다. (클릭하여 확인)</div>}
-                </div>
-
-                <div onClick={() => dashboardStats.maintCount > 0 && openStatusDrillDown('MAINT')} className={`bg-white p-5 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden group transition-all ${dashboardStats.maintCount > 0 ? 'cursor-pointer hover:border-red-300 hover:shadow-md' : ''}`}>
-                  <h3 className="text-slate-500 text-sm font-bold mb-1 flex items-center"><AlertTriangle size={16} className="mr-1.5 text-red-500"/> 장애 / 점검 대상</h3>
-                  <div className="flex items-baseline gap-2"><span className={`text-4xl font-black ${dashboardStats.maintCount > 0 ? 'text-red-600 group-hover:text-red-700' : 'text-slate-800'}`}>{dashboardStats.maintCount}</span><span className="text-sm font-medium text-slate-500">건</span></div>
-                  {dashboardStats.maintCount > 0 && <div className="mt-2 text-xs font-bold text-red-500 bg-red-50 inline-block px-2 py-1 rounded">조치가 필요합니다. (클릭하여 확인)</div>}
-                </div>
-              </div>
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-2">
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 col-span-1 flex flex-col">
-                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center"><Info size={18} className="mr-2 text-blue-500" /> 자산 운영 상태 분포</h3>
-                  <div className="w-full h-8 flex rounded-lg overflow-hidden mb-6 bg-slate-100 border shadow-inner">
-                    {dashboardStats.totalServers > 0 && (
-                      <>
-                        <div className="bg-emerald-500 h-full" style={{ width: `${(dashboardStats.operCount / dashboardStats.totalServers) * 100}%` }}></div>
-                        <div className="bg-red-500 h-full" style={{ width: `${(dashboardStats.maintCount / dashboardStats.totalServers) * 100}%` }}></div>
-                        <div className="bg-slate-400 h-full" style={{ width: `${(dashboardStats.idleCount / dashboardStats.totalServers) * 100}%` }}></div>
-                        <div className="bg-amber-400 h-full" style={{ width: `${(dashboardStats.waitCount / dashboardStats.totalServers) * 100}%` }}></div>
-                      </>
-                    )}
-                  </div>
-                  <div className="flex flex-col flex-1 justify-center">
-                    <div onClick={() => dashboardStats.operCount > 0 && openStatusDrillDown('OPER')} className={`flex justify-between items-center py-2 px-2 rounded-lg transition-colors ${dashboardStats.operCount > 0 ? 'cursor-pointer hover:bg-emerald-50' : ''}`}>
-                      <div className="flex items-center"><div className="w-3 h-3 rounded-full bg-emerald-500 mr-2 shadow-[0_0_5px_#10b981]"></div><span className="text-sm font-bold text-slate-700">정상 운영 (OPER)</span></div>
-                      <span className="font-bold text-slate-800 group-hover:text-emerald-700">{dashboardStats.operCount} 대</span>
-                    </div>
-                    <div onClick={() => dashboardStats.maintCount > 0 && openStatusDrillDown('MAINT')} className={`flex justify-between items-center py-2 px-2 rounded-lg transition-colors ${dashboardStats.maintCount > 0 ? 'cursor-pointer hover:bg-red-50' : ''}`}>
-                      <div className="flex items-center"><div className="w-3 h-3 rounded-full bg-red-500 mr-2 shadow-[0_0_5px_#ef4444]"></div><span className="text-sm font-bold text-slate-700">장애/점검 (MAINT)</span></div>
-                      <span className="font-bold text-slate-800">{dashboardStats.maintCount} 대</span>
-                    </div>
-                    <div onClick={() => dashboardStats.idleCount > 0 && openStatusDrillDown('IDLE')} className={`flex justify-between items-center py-2 px-2 rounded-lg transition-colors ${dashboardStats.idleCount > 0 ? 'cursor-pointer hover:bg-slate-100' : ''}`}>
-                      <div className="flex items-center"><div className="w-3 h-3 rounded-full bg-slate-400 mr-2"></div><span className="text-sm font-bold text-slate-700">유휴 자산 (IDLE)</span></div>
-                      <span className="font-bold text-slate-800">{dashboardStats.idleCount} 대</span>
-                    </div>
-                    <div onClick={() => dashboardStats.waitCount > 0 && openStatusDrillDown('WAIT')} className={`flex justify-between items-center py-2 px-2 rounded-lg transition-colors ${dashboardStats.waitCount > 0 ? 'cursor-pointer hover:bg-amber-50' : ''}`}>
-                      <div className="flex items-center"><div className="w-3 h-3 rounded-full bg-amber-400 mr-2 shadow-[0_0_5px_#fbbf24]"></div><span className="text-sm font-bold text-slate-700">셋업 대기 (WAIT)</span></div>
-                      <span className="font-bold text-slate-800">{dashboardStats.waitCount} 대</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-0 col-span-1 lg:col-span-2 flex flex-col overflow-hidden">
-                  <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50"><h3 className="text-lg font-bold text-slate-800 flex items-center"><AlertTriangle size={18} className="mr-2 text-red-500" /> 집중 관리 대상 (장애/수리 요망)</h3><span className="text-xs bg-red-100 text-red-600 px-3 py-1 rounded-full font-bold shadow-sm">{dashboardStats.maintList.length}건 발생</span></div>
-                  <div className="flex-1 overflow-y-auto p-4 max-h-[300px] bg-slate-50/30">
-                    {dashboardStats.maintList.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-slate-400 py-8"><CheckCircle size={48} className="text-emerald-200 mb-3" /><p className="font-bold text-emerald-600">현재 장애가 없습니다.</p></div>
-                    ) : (
-                      <div className="flex flex-col gap-3">
-                        {dashboardStats.maintList.map(server => (
-                          <div key={server.id} className="bg-white border border-red-100 p-4 rounded-xl shadow-sm flex items-start cursor-pointer hover:bg-red-50/20" onClick={() => handleGlobalSearchSelect({ campus: server.campus, building: server.building, rack: server.rack, server })}>
-                            <div className="p-2 bg-red-50 rounded-lg mr-4 mt-0.5 shadow-inner"><AlertTriangle size={20} className="text-red-500" /></div>
-                            <div className="flex-1"><div className="flex justify-between items-center"><h4 className="font-bold text-slate-800 font-mono text-sm">{server.hostname}</h4><span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded text-slate-500 font-mono border">{server.specs?.ip}</span></div><p className="text-xs text-slate-500 mt-1 flex items-center font-medium"><MapPin size={12} className="mr-1 opacity-70" /> {server.locationPath}</p><div className="mt-2 pt-2 border-t border-slate-50 text-sm text-red-700 font-medium"><span className="text-xs font-bold bg-red-100 text-red-600 px-1.5 py-0.5 rounded mr-1">사유</span>{server.description || '내용 없음'}</div></div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
+            <Dashboard stats={dashboardStats} onOpenStatus={openStatusDrillDown} />
           ) : !selectedRack ? (
             <div className="flex-1 animate-in fade-in duration-300">
               <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800 flex items-center"><MapPin className="mr-2 text-blue-500" /> {selectedBuilding.name} 랙(Rack) 구성도</h2></div>
