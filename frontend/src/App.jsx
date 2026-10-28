@@ -27,7 +27,6 @@ export default function App() {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ALL');
 
   const [activePort, setActivePort] = useState(null);
   const [portInputValue, setPortInputValue] = useState('');
@@ -216,8 +215,7 @@ export default function App() {
     if (!selectedRack || !selectedRack.servers) return { power: [], pubLan: [], privLan: [], ip: [] };
     const powerMap = {}; const pubLanMap = {}; const privLanMap = {}; const ipMap = {};
 
-    const visible = statusFilter === 'ALL' ? selectedRack.servers : selectedRack.servers.filter(s => s.status === statusFilter);
-    visible.forEach(s => {
+    selectedRack.servers.forEach(s => {
       const model = s.model_name || '기종 미상';
       const power = Number(s.specs?.power_w) || 0;
       const pubLan = Number(s.specs?.public_lan) || 0;
@@ -259,14 +257,13 @@ export default function App() {
       privLan: Object.values(privLanMap),
       ip: Object.values(ipMap)
     };
-  }, [selectedRack, statusFilter]);
+  }, [selectedRack]);
 
   // ⭐️ 메인 상세 실장도 전체 합계 계산 로직
   const detailedTotals = useMemo(() => {
     if (!selectedRack || !selectedRack.servers) return { power: 0, current: 0, lan: 0, pip: 0, vip: 0, priv: 0 };
     let power = 0, lan = 0, pip = 0, vip = 0, priv = 0;
-    const visible = statusFilter === 'ALL' ? selectedRack.servers : selectedRack.servers.filter(s => s.status === statusFilter);
-    visible.forEach(s => {
+    selectedRack.servers.forEach(s => {
       power += Number(s.specs?.power_w) || 0;
       lan += Number(s.specs?.public_lan) || 0;
       priv += Number(s.specs?.private_lan) || 0;
@@ -274,13 +271,13 @@ export default function App() {
       if (s.specs?.virtual_ip?.trim()) vip += s.specs.virtual_ip.split(',').filter(x => x.trim()).length;
     });
     return { power, current: power / 220, lan, pip, vip, priv };
-  }, [selectedRack, statusFilter]);
+  }, [selectedRack]);
 
   const rackTableRows = useMemo(() => {
     if (!selectedRack) return [];
     const rows = [];
     const totalU = selectedRack.total_u_space || 42;
-    const servers = (selectedRack.servers || []).filter(s => statusFilter === 'ALL' || s.status === statusFilter);
+    const servers = selectedRack.servers || [];
 
     for (let u = totalU; u >= 1; u--) {
       const serverHere = servers.find(s => u >= s.start_u && u < s.start_u + (s.size_u || 1));
@@ -292,7 +289,7 @@ export default function App() {
       }
     }
     return rows;
-  }, [selectedRack, statusFilter]);
+  }, [selectedRack]);
 
   const goHome = () => { setSelectedBuilding(null); setSelectedRack(null); setSelectedServer(null); setIsEditing(false); setSearchTerm(''); setActivePort(null); };
   const handleCampusClick = (campusId) => setExpandedCampus(expandedCampus === campusId ? null : campusId);
@@ -775,7 +772,7 @@ export default function App() {
     const servers = selectedRack?.servers || [];
     if (statusFilter === 'ALL') return servers;
     return servers.filter(s => s.status === statusFilter);
-  }, [selectedRack, statusFilter]);
+  }, [selectedRack]);
 
   const filteredServers = useMemo(() => {
     if (!selectedRack || !searchTerm) return selectedRack?.servers || [];
@@ -974,18 +971,11 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <label className="px-3 py-1.5 flex items-center bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold transition-colors shadow-sm cursor-pointer">CSV 가져오기<input type="file" accept=".csv" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleImportCsv(e.target.files[0]); e.target.value=''; }} /></label>
                         <button onClick={handleExportExcel} className="px-3 py-1.5 flex items-center bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold transition-colors shadow-sm" title="CSV 다운로드와 엑셀 붙여넣기용 복사를 함께 수행"><Copy size={14} className="mr-1.5" /> 엑셀 내보내기</button>
-                        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
-                          <option value="ALL">전체 상태</option>
-                          <option value="OPER">OPER</option>
-                          <option value="MAINT">MAINT</option>
-                          <option value="IDLE">IDLE</option>
-                          <option value="WAIT">WAIT</option>
-                        </select>
-                        <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full shadow-inner border border-slate-200">총 실장 장비: {statusFilteredServers.length}대</span>
+<span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full shadow-inner border border-slate-200">총 실장 장비: {(selectedRack.servers?.length || 0)}대</span>
                       </div>
                     </div>
 
-                    {statusFilteredServers.length === 0 ? (
+                    {(selectedRack.servers?.length || 0) === 0 ? (
                       <div className="flex-1 flex flex-col items-center justify-center text-slate-400 text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
                         <Server size={48} className="mb-4 opacity-20 text-blue-500" />
                         <p className="text-lg font-bold text-slate-600">이 랙은 비어 있습니다.</p>
