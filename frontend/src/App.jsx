@@ -566,21 +566,34 @@ export default function App() {
     } else captureRack();
   };
 
-  const handleCopyExcelData = () => {
+  const handleExportExcel = () => {
+    if (!selectedRack?.servers?.length) { showToast("내보낼 장비가 없습니다.", "error"); return; }
+
+    const headers = ["Hostname","Model","Status","StartU","SizeU","PowerW","PublicIP","PrivateIP","MgmtIP"];
+    const rows = selectedRack.servers
+      .filter(s => statusFilter === 'ALL' || s.status === statusFilter)
+      .map(s => [
+        s.hostname || "", s.model_name || "", s.status || "", s.start_u || "", s.size_u || "",
+        s.specs?.power_w || "", s.specs?.public_ip || "", s.specs?.private_ip || "", s.specs?.mgmt_ip || s.specs?.ip || ""
+      ]);
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${selectedRack.name}-assets.csv`;
+    a.click();
+
     const tableDiv = document.getElementById('rack-summary-tables');
-    if (!tableDiv) return;
-    try {
+    if (tableDiv) {
       const clone = tableDiv.cloneNode(true);
       clone.querySelectorAll('table').forEach(table => {
-        const rows = Array.from(table.querySelectorAll('tr'));
-        const colCount = Math.max(0, ...rows.map(r => r.children.length));
+        const trs = Array.from(table.querySelectorAll('tr'));
+        const colCount = Math.max(0, ...trs.map(r => r.children.length));
         const maxLen = Array(colCount).fill(0);
-        rows.forEach(row => {
-          Array.from(row.children).forEach((cell, i) => {
-            const len = (cell.textContent || '').trim().length;
-            if (len > maxLen[i]) maxLen[i] = len;
-          });
-        });
+        trs.forEach(row => Array.from(row.children).forEach((cell, i) => {
+          const len = (cell.textContent || '').trim().length;
+          if (len > maxLen[i]) maxLen[i] = len;
+        }));
         const colgroup = document.createElement('colgroup');
         maxLen.forEach(len => {
           const col = document.createElement('col');
@@ -591,12 +604,10 @@ export default function App() {
         });
         table.insertBefore(colgroup, table.firstChild);
         table.style.tableLayout = 'fixed';
-        table.style.width = 'auto';
         table.querySelectorAll('th, td').forEach(el => {
           el.style.fontSize = '11pt';
           el.style.fontFamily = 'Calibri, Arial, sans-serif';
           el.style.whiteSpace = 'nowrap';
-          el.style.height = '18pt';
         });
       });
       const holder = document.createElement('div');
@@ -612,24 +623,8 @@ export default function App() {
       document.execCommand('copy');
       selection.removeAllRanges();
       document.body.removeChild(holder);
-      showToast("표가 복사되었습니다. 열 너비는 글자 길이에 맞춰 설정됩니다.", "success");
-    } catch (err) { showToast("복사 중 오류가 발생했습니다.", "error"); }
-  };
-
-  const handleDownloadExcel = () => {
-    if (!selectedRack?.servers?.length) { showToast("내보낼 장비가 없습니다.", "error"); return; }
-    const headers = ["Hostname","Model","Status","StartU","SizeU","PowerW","PublicIP","PrivateIP","MgmtIP"];
-    const rows = selectedRack.servers.map(s => [
-      s.hostname || "", s.model_name || "", s.status || "", s.start_u || "", s.size_u || "",
-      s.specs?.power_w || "", s.specs?.public_ip || "", s.specs?.private_ip || "", s.specs?.mgmt_ip || s.specs?.ip || ""
-    ]);
-    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(",")).join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${selectedRack.name}-assets.csv`;
-    a.click();
-    showToast("엑셀(CSV) 파일을 다운로드했습니다.", "success");
+    }
+    showToast("CSV 다운로드와 엑셀 붙여넣기용 복사를 완료했습니다.", "success");
   };
 
   const openStatusDrillDown = (statusCode) => {
@@ -854,8 +849,7 @@ export default function App() {
                     <div className="flex items-center justify-between border-b border-slate-200 pb-3 mb-4 shrink-0">
                       <h2 className="text-xl font-bold text-slate-800 flex items-center"><List className="text-blue-500 mr-2" size={20} /> 랙 자산 및 자원 할당 명세서</h2>
                       <div className="flex items-center gap-2">
-                        <button onClick={handleCopyExcelData} className="px-3 py-1.5 flex items-center bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold transition-colors shadow-sm" title="표 내용을 복사하여 엑셀에 붙여넣기"><Copy size={14} className="mr-1.5" /> 표 복사</button>
-                        <button onClick={handleDownloadExcel} className="px-3 py-1.5 flex items-center bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-lg text-xs font-bold transition-colors shadow-sm"><Copy size={14} className="mr-1.5" /> CSV 다운로드</button>
+                        <button onClick={handleExportExcel} className="px-3 py-1.5 flex items-center bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold transition-colors shadow-sm" title="CSV 다운로드와 엑셀 붙여넣기용 복사를 함께 수행"><Copy size={14} className="mr-1.5" /> 엑셀 내보내기</button>
                         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
                           <option value="ALL">전체 상태</option>
                           <option value="OPER">OPER</option>
