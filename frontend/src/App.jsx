@@ -913,8 +913,10 @@ export default function App() {
                     {globalSearchResults.map((res, idx) => (
                       <div key={idx} onClick={() => handleGlobalSearchSelect(res)} className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 flex items-center justify-between gap-2">
                         <div className="flex flex-col gap-1 min-w-0">
-                        <div className="flex justify-between items-center"><span className="font-bold text-blue-700 font-mono text-sm">{res.server.hostname}</span><span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-500 border border-slate-200">{res.server.specs?.ip || 'IP 없음'}</span></div>
-                        <div className="flex justify-between items-end"><span className="text-xs text-slate-500">{res.server.model_name}</span><div className="text-[10px] font-medium text-slate-400 flex items-center"><MapPin size={10} className="mr-1" />{res.building.name} &gt; {res.rack.name} ({res.server.start_u}U)</div></div>
+                          <div className="flex justify-between items-center"><span className="font-bold text-blue-700 font-mono text-sm">{res.server.hostname}</span><span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-500 border border-slate-200">{res.server.specs?.ip || 'IP 없음'}</span></div>
+                          <div className="flex justify-between items-end"><span className="text-xs text-slate-500">{res.server.model_name}</span><div className="text-[10px] font-medium text-slate-400 flex items-center"><MapPin size={10} className="mr-1" />{res.building.name} {'>'} {res.rack.name} ({res.server.start_u}U)</div></div>
+                        </div>
+                        <span className="text-[10px] font-bold text-blue-600 shrink-0">이동</span>
                       </div>
                     ))}
                   </div>
