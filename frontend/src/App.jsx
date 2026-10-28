@@ -413,6 +413,11 @@ export default function App() {
       })
       .catch(() => showToast('삭제 실패', 'error'));
   };
+  const guessSizeU = (model) => {
+    const name = (model || '').toUpperCase();
+    const map = [['DL380', 2], ['EF300', 2], ['R750', 2], ['DL360', 1], ['DL20', 1], ['R650', 1], ['MDS-9148', 1], ['CP2500', 1], ['KVM', 1], ['S4148', 1], ['R2500', 1]];
+    return map.find(([k]) => name.includes(k))?.[1] || 1;
+  };
   const handleImportCsv = async (file) => {
     if (!selectedRack) { showToast('랙을 먼저 선택하세요.', 'error'); return; }
     const text = await file.text();
@@ -426,7 +431,7 @@ export default function App() {
         model_name: cols[idx('model')] || '',
         status: cols[idx('status')] || 'WAIT',
         start_u: cols[idx('start')] || 1,
-        size_u: cols[idx('size')] || 1,
+        size_u: cols[idx('size')] || guessSizeU(cols[idx('model')] || ''),
         power_w: cols[idx('power')] || '',
         public_ip: cols[idx('public')] || '',
         private_ip: cols[idx('private')] || '',

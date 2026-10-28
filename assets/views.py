@@ -278,6 +278,18 @@ def delete_rack(request, rack_id):
 
 @csrf_exempt
 @login_required_api
+MODEL_SIZE_MAP = {
+    "DL360": 1, "DL380": 2, "DL20": 1, "R650": 1, "R750": 2, "R2500": 1,
+    "MDS-9148": 1, "CP2500": 1, "KVM": 1, "S4148": 1, "EF300": 2,
+}
+
+def guess_size_u(model_name):
+    name = (model_name or "").upper()
+    for key, size in MODEL_SIZE_MAP.items():
+        if key.upper() in name:
+            return size
+    return 1
+
 def import_servers(request):
     if request.method != 'POST':
         return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
@@ -294,7 +306,7 @@ def import_servers(request):
             model_name=row.get('model_name', ''),
             status=row.get('status') or 'WAIT',
             start_u=int(row.get('start_u') or 1),
-            size_u=int(row.get('size_u') or 1),
+            size_u=int(row.get('size_u') or guess_size_u(row.get('model_name'))),
             specs={
                 'power_w': row.get('power_w', ''),
                 'public_ip': row.get('public_ip', ''),
