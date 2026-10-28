@@ -768,12 +768,6 @@ export default function App() {
     return <Server size={size} className={className} />;
   };
   
-  const statusFilteredServers = useMemo(() => {
-    const servers = selectedRack?.servers || [];
-    if (statusFilter === 'ALL') return servers;
-    return servers.filter(s => s.status === statusFilter);
-  }, [selectedRack]);
-
   const filteredServers = useMemo(() => {
     if (!selectedRack || !searchTerm) return selectedRack?.servers || [];
     const term = searchTerm.toLowerCase();
