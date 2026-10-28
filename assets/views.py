@@ -276,8 +276,6 @@ def delete_rack(request, rack_id):
     Rack.objects.get(id=rack_id).delete()
     return JsonResponse({'message': 'Deleted'})
 
-@csrf_exempt
-@login_required_api
 MODEL_SIZE_MAP = {
     "DL360": 1, "DL380": 2, "DL20": 1, "R650": 1, "R750": 2, "R2500": 1,
     "MDS-9148": 1, "CP2500": 1, "KVM": 1, "S4148": 1, "EF300": 2,
@@ -290,6 +288,8 @@ def guess_size_u(model_name):
             return size
     return 1
 
+@csrf_exempt
+@login_required_api
 def import_servers(request):
     if request.method != 'POST':
         return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
