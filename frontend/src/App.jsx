@@ -64,6 +64,13 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
 
   
+  // 서버가 보낸 오류 메시지(예: U 위치 겹침)를 그대로 보여주기 위한 응답 처리
+  const readJsonOrThrow = async (res, fallback) => {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || fallback);
+    return data;
+  };
+
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -79,6 +86,32 @@ export default function App() {
       })
       .then(data => {
         setSiteData(data);
+        // 선택 중인 건물·랙·장비는 siteData의 복사본이라, 새로 받은 데이터로 다시 맞춰줍니다.
+        // (예전에는 CSV 가져오기 후 랙을 다시 클릭해야 새 장비가 보였습니다.)
+        const findBuilding = (id) => {
+          for (const c of data) {
+            const b = c.buildings?.find(x => x.id === id);
+            if (b) return { ...b, campusName: c.name };
+          }
+          return null;
+        };
+        const findRack = (id) => {
+          for (const c of data) for (const b of c.buildings || []) {
+            const r = b.racks?.find(x => x.id === id);
+            if (r) return r;
+          }
+          return null;
+        };
+        setSelectedBuilding(prev => prev ? findBuilding(prev.id) : prev);
+        setSelectedRack(prev => prev ? findRack(prev.id) : prev);
+        setSelectedServer(prev => {
+          if (!prev || prev.isNew) return prev;
+          for (const c of data) for (const b of c.buildings || []) for (const r of b.racks || []) {
+            const s = r.servers?.find(x => x.id === prev.id);
+            if (s) return s;
+          }
+          return null;
+        });
         setLoading(false);
       })
       .catch(err => {
@@ -397,6 +430,8 @@ export default function App() {
       .then(() => {
         const updated = { ...selectedBuilding, racks: selectedBuilding.racks.map(r => r.id === rack.id ? { ...r, name } : r) };
         setSelectedBuilding(updated);
+        // 전체 데이터에도 반영해야 검색·대시보드·건물 재진입 시 옛 이름이 나오지 않습니다.
+        setSiteData(prev => prev.map(c => ({ ...c, buildings: c.buildings?.map(b => ({ ...b, racks: b.racks?.map(r => r.id === rack.id ? { ...r, name } : r) })) })));
         if (selectedRack?.id === rack.id) setSelectedRack({ ...selectedRack, name });
         showToast('랙 이름이 수정되었습니다.');
       })
@@ -408,6 +443,8 @@ export default function App() {
       .then(res => { if (!res.ok) throw new Error(); })
       .then(() => {
         setSelectedBuilding({ ...selectedBuilding, racks: selectedBuilding.racks.filter(r => r.id !== rack.id) });
+        // 전체 데이터에서도 제거해야 삭제한 랙과 장비가 대시보드·검색에 남지 않습니다.
+        setSiteData(prev => prev.map(c => ({ ...c, buildings: c.buildings?.map(b => ({ ...b, racks: b.racks?.filter(r => r.id !== rack.id) })) })));
         if (selectedRack?.id === rack.id) setSelectedRack(null);
         showToast('랙이 삭제되었습니다.');
       })
@@ -415,7 +452,7 @@ export default function App() {
   };
   const guessSizeU = (model) => {
     const name = (model || '').toUpperCase().replace(/[\s\-_]/g, '');
-    const map = [['R760XA',2],['R760',2],['R660XS',1],['R660',1],['R7715',2],['R470',1],['R360',1],['DL380',2],['DL360',1],['DL320',1],['DL20',1],['A400',4],['A250',2],['FAS2820',2],['FAS7200',6],['UNITY380',2],['POWERSCALE',4],['H700',4],['X20',3],['MDS9148',1],['MDS9132',1],['S5148',1],['S4148',1],['S5248',1],['S3248',1],['JL814A',1],['7010TX',1],['7050SX',1],['THUNDER',1],['CL5716',1],['R650',1],['R750',2],['EF300',2],['KVM',1]];
+    const map = [['R760XA',2],['R760',2],['R660XS',1],['R660',1],['R7715',2],['R470',1],['R360',1],['DL380',2],['DL360',1],['DL320',1],['DL20',1],['A400',4],['A250',2],['FAS2820',2],['FAS7200',6],['UNITY380',2],['POWERSCALE',4],['H700',4],['X20',3],['MDS9148',1],['MDS9132',1],['S5148',1],['S4148',1],['S5248',1],['S3248',1],['JL814A',1],['7010TX',1],['7050SX',1],['THUNDER',1],['CL5716',1],['R650',1],['R750',2],['R2500',1],['EF300',2],['KVM',1]]; // 백엔드 MODEL_SIZE_MAP과 동일하게 유지
     return map.find(([k]) => name.includes(k))?.[1] || 1;
   };
   const handleImportCsv = async (file) => {
@@ -439,9 +476,9 @@ export default function App() {
       };
     });
     apiFetch('/api/server/import/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rack_id: selectedRack.id, rows }) })
-      .then(res => res.json())
+      .then(res => readJsonOrThrow(res, '가져오기 실패'))
       .then(data => { showToast(`${data.created || 0}대 가져왔습니다.`); fetchSiteData(); })
-      .catch(() => showToast('가져오기 실패', 'error'));
+      .catch(err => showToast(err.message || '가져오기 실패', 'error'));
   };
 
   const handleAddRackClick = () => { setNewRackForm({ name: '', location: '', total_u_space: 42 }); setIsAddingRack(true); };
@@ -552,12 +589,12 @@ export default function App() {
     const url = isNew ? `${API_BASE_URL}/api/server/add/` : `${API_BASE_URL}/api/server/update/${editForm.id}/`;
     
     apiFetch(url.replace(API_BASE_URL, ''), { method: isNew ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...editForm, rack_id: selectedRack.id }) })
-    .then(res => { if (!res.ok) throw new Error('저장 실패'); return res.json(); })
+    .then(res => readJsonOrThrow(res, '저장 오류'))
     .then(savedData => {
       const completeData = { ...editForm, ...savedData };
       updateLocalState(completeData, isNew);
       showToast(isNew ? "새 장비 실장 완료" : "업데이트 완료", "success");
-    }).catch(err => showToast("저장 오류", "error"));
+    }).catch(err => showToast(err.message || "저장 오류", "error"));
   };
 
   const handleDelete = () => {
@@ -597,10 +634,10 @@ export default function App() {
     
     const updatedServer = { ...serverToMove, start_u: targetU };
     apiFetch(`/api/server/update/${serverToMove.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedServer) })
-    .then(res => {
-      if (!res.ok) throw new Error('이동 실패');
+    .then(res => readJsonOrThrow(res, '이동 중 오류 발생'))
+    .then(() => {
       updateLocalState(updatedServer, false); showToast("장비 위치가 이동되었습니다.", "success");
-    }).catch(err => showToast("이동 중 오류 발생", "error"));
+    }).catch(err => showToast(err.message || "이동 중 오류 발생", "error"));
   };
 
   const updateLocalState = (savedData, isNew) => {
