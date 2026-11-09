@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   MapPin, Search, Upload, Download, X, ExternalLink, AlertTriangle, CheckCircle,
-  Wrench, Wifi, ClipboardList, Server, ChevronUp, ChevronDown, Plus, Pencil, Trash2,
+  Wrench, Wifi, ClipboardList, Server, ChevronUp, ChevronDown, Plus, Pencil, Trash2, LayoutGrid,
 } from 'lucide-react';
 import { apiJson, jsonBody, API_BASE_URL } from '../api/client';
 import FieldAssetForm, { PMRecordForm, PMRecordList } from './FieldAssetForm';
@@ -34,7 +34,7 @@ const COLUMNS = [
 const uniq = (items, key) => [...new Set(items.map(i => i[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
 const fmtDateTime = (v) => (v ? new Date(v).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }) : '-');
 
-export default function FieldAssets({ showToast, focusId, onFocusHandled, askDelete }) {
+export default function FieldAssets({ showToast, focusId, onFocusHandled, askDelete, onPlaced, onOpenRack }) {
   const [data, setData] = useState({ items: [], last_imported_at: null });
   const [loading, setLoading] = useState(true);
   const [quick, setQuick] = useState('all');
@@ -43,6 +43,7 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
   const [selectedId, setSelectedId] = useState(null);
   const [formAsset, setFormAsset] = useState(null); // {} = 새 장비, 장비 객체 = 수정
   const [importState, setImportState] = useState(null); // { file, preview, busy }
+  const [placeState, setPlaceState] = useState(null); // { preview, busy } 랙 배치 확인 창
 
   const load = () => apiJson('/api/field-assets/')
     .then(setData)
@@ -53,6 +54,24 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
 
   const items = data.items;
   const selected = items.find(a => a.id === selectedId) || null;
+  const unplacedCount = items.filter(a => !a.rack).length;
+
+  // 아직 랙에 없는 장비를 랙에 임시 배치 (먼저 결과를 보여주고 확인 후 실행)
+  const startPlace = () => {
+    setPlaceState({ preview: null, busy: true });
+    apiJson('/api/field-assets/place/', jsonBody('POST', { mode: 'preview' }))
+      .then(preview => setPlaceState({ preview, busy: false }))
+      .catch(err => { showToast(err.message, 'error'); setPlaceState(null); });
+  };
+  const commitPlace = () => {
+    setPlaceState(st => ({ ...st, busy: true }));
+    apiJson('/api/field-assets/place/', jsonBody('POST', {}))
+      .then(r => {
+        showToast(`${r.placed}대를 랙에 배치했습니다.${r.racks_created ? ` (새 랙 ${r.racks_created}개)` : ''}`);
+        setPlaceState(null); load(); onPlaced?.();
+      })
+      .catch(err => { showToast(err.message, 'error'); setPlaceState(st => ({ ...st, busy: false })); });
+  };
 
   // 상단 전체 검색에서 고른 장비를 바로 열기 (목록을 다시 받아온 뒤)
   useEffect(() => {
@@ -168,6 +187,12 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {unplacedCount > 0 && (
+            <button onClick={startPlace} title="아직 랙 구성도에 없는 장비를 단지 > 현장 > 제품별 랙에 임시로 넣습니다"
+              className="px-3 py-2 flex items-center bg-violet-600 text-white hover:bg-violet-700 rounded-lg text-xs font-bold">
+              <LayoutGrid size={14} className="mr-1.5" /> 랙에 배치 <span className="ml-1.5 bg-white/25 rounded px-1.5">미배치 {unplacedCount}대</span>
+            </button>
+          )}
           <button onClick={() => setFormAsset({})} className="px-3 py-2 flex items-center bg-blue-600 text-white hover:bg-blue-700 rounded-lg text-xs font-bold">
             <Plus size={14} className="mr-1.5" /> 장비 추가
           </button>
@@ -280,16 +305,17 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
 
       {/* 화면 전체(사이드바 포함) 위에 띄우기 위해 body에 렌더링 */}
       {selected && !formAsset && createPortal(
-        <DetailPanel asset={selected} onClose={() => setSelectedId(null)} onEdit={() => setFormAsset(selected)}
+        <DetailPanel asset={selected} onClose={() => setSelectedId(null)} onEdit={() => setFormAsset(selected)} onOpenRack={onOpenRack}
           onDelete={() => deleteAsset(selected)} onAssetChanged={applyAsset} showToast={showToast} />, document.body)}
       {formAsset && createPortal(
         <FieldAssetForm asset={formAsset} options={options} onCancel={() => setFormAsset(null)} onSave={saveAsset} />, document.body)}
+      {placeState && createPortal(<PlaceConfirm state={placeState} onCancel={() => setPlaceState(null)} onCommit={commitPlace} />, document.body)}
       {importState && createPortal(<ImportConfirm state={importState} onCancel={() => setImportState(null)} onCommit={commitImport} />, document.body)}
     </div>
   );
 }
 
-function DetailPanel({ asset: a, onClose, onEdit, onDelete, onAssetChanged, showToast }) {
+function DetailPanel({ asset: a, onClose, onEdit, onDelete, onAssetChanged, showToast, onOpenRack }) {
   const [records, setRecords] = useState(null);
   const [adding, setAdding] = useState(false);
   useEffect(() => {
@@ -335,6 +361,20 @@ function DetailPanel({ asset: a, onClose, onEdit, onDelete, onAssetChanged, show
           </div>
         </div>
         <div className="p-5 space-y-5">
+          <section>
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">랙 위치</h4>
+            {a.rack ? (
+              <button onClick={() => onOpenRack?.(a.rack)} className="w-full flex items-center justify-between gap-2 text-left bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 hover:bg-violet-100">
+                <span className="min-w-0">
+                  <span className="block text-sm font-bold text-violet-800 truncate">{a.rack.path}</span>
+                  <span className="block text-xs text-violet-600 font-mono">{a.rack.u} · {a.rack.hostname}</span>
+                </span>
+                <span className="text-xs font-bold text-violet-700 shrink-0 flex items-center"><LayoutGrid size={12} className="mr-1" />랙에서 보기</span>
+              </button>
+            ) : (
+              <p className="text-sm text-slate-500 bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">아직 랙 구성도에 배치되지 않았습니다. 위쪽 <b>랙에 배치</b> 버튼으로 넣을 수 있습니다.</p>
+            )}
+          </section>
           <section>
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">기본 정보</h4>
             <dl>{row('제품', a.product)}{row('Model', a.model_name)}{row('S/N', a.serial_number, true)}</dl>
@@ -428,6 +468,59 @@ function ImportConfirm({ state, onCancel, onCommit }) {
           <button onClick={onCommit} disabled={state.busy || !p || (p.created + p.updated === 0)}
             className="px-4 py-2 rounded-lg text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40">
             {p ? `${p.created + p.updated}대 반영` : '반영'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlaceConfirm({ state, onCancel, onCommit }) {
+  const p = state.preview;
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[88vh] flex flex-col">
+        <div className="p-5 border-b border-slate-100">
+          <h3 className="text-lg font-bold text-slate-800 flex items-center"><LayoutGrid size={18} className="mr-2 text-violet-600" /> 랙 구성도에 배치</h3>
+          <p className="text-sm text-slate-500 mt-0.5">아직 랙에 없는 현장 장비를 <b>단지 → 캠퍼스, 현장 → 건물, 제품 → 랙</b>으로 임시 배치합니다.</p>
+        </div>
+        <div className="p-5 text-sm overflow-y-auto space-y-3">
+          {!p ? <p className="text-slate-500">확인 중...</p> : (
+            <>
+              <div className="grid grid-cols-2 gap-2 text-center">
+                <div className="bg-violet-50 rounded-lg p-3"><div className="text-2xl font-black text-violet-600">{p.placed}</div><div className="text-xs text-slate-500">배치할 장비</div></div>
+                <div className="bg-blue-50 rounded-lg p-3"><div className="text-2xl font-black text-blue-600">{p.racks_created}</div><div className="text-xs text-slate-500">새로 만들 랙</div></div>
+              </div>
+              <ul className="text-xs text-slate-600 list-disc pl-4 space-y-0.5">
+                <li>각 랙의 비어 있는 U에 아래부터 차례로 넣습니다. 실제 위치는 랙 화면에서 끌어다 옮기면 됩니다.</li>
+                <li>배치한 뒤 현장 장비에서 고친 호스트명·모델·상태·S/N·IP는 랙 장비에도 반영됩니다.</li>
+              </ul>
+              {p.renamed.length > 0 && (
+                <div className="text-xs bg-amber-50 text-amber-800 rounded-lg p-2">
+                  <b>같은 현장에 같은 이름이 있어 번호를 붙일 장비 {p.renamed.length}대</b>
+                  <ul className="mt-1 max-h-24 overflow-y-auto">{p.renamed.map(x => <li key={x}>{x}</li>)}</ul>
+                </div>
+              )}
+              {p.ip_fixed.length > 0 && (
+                <div className="text-xs bg-slate-50 text-slate-600 rounded-lg p-2">
+                  <b>IP 형식이 맞지 않아 비워 둘 항목 {p.ip_fixed.length}건</b> (원래 값은 설명란에 남김)
+                  <ul className="mt-1 max-h-24 overflow-y-auto font-mono">{p.ip_fixed.map(x => <li key={x}>{x}</li>)}</ul>
+                </div>
+              )}
+              {p.racks.length > 0 && (
+                <details className="text-xs text-slate-600">
+                  <summary className="cursor-pointer font-bold">사용할 랙 {p.racks.length}개 보기</summary>
+                  <ul className="mt-1 max-h-32 overflow-y-auto">{p.racks.map(x => <li key={x}>{x}</li>)}</ul>
+                </details>
+              )}
+            </>
+          )}
+        </div>
+        <div className="p-4 border-t border-slate-100 flex justify-end gap-2">
+          <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-100">취소</button>
+          <button onClick={onCommit} disabled={state.busy || !p?.placed}
+            className="px-4 py-2 rounded-lg text-sm font-bold bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40">
+            {p ? `${p.placed}대 배치` : '배치'}
           </button>
         </div>
       </div>

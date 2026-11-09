@@ -12,7 +12,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from .models import Building, Campus, FieldAsset, PMRecord, Rack, ServerAsset
 from .services import (
     ValidationError, clean_field_asset, clean_health, field_template_csv, import_field_assets, parse_csv,
-    refresh_asset_pm,
+    place_field_assets, rack_link, rack_servers_by_field_asset, refresh_asset_pm, sync_rack_server,
     template_csv, to_int, validate_import, validate_server_payload, _parse_date,
 )
 
@@ -377,12 +377,18 @@ FIELD_ASSET_FIELDS = ('id', 'monday_item_id', 'hostname', 'site_group', 'complex
 @api('GET')
 def field_assets(request):
     items = list(FieldAsset.objects.values(*FIELD_ASSET_FIELDS))
+    placed = rack_servers_by_field_asset()
+    for i in items:
+        i['rack'] = rack_link(placed.get(i['id']))
     last = max((i['imported_at'] for i in items if i['imported_at']), default=None)
-    return JsonResponse({'items': items, 'last_imported_at': last})
+    unplaced = sum(1 for i in items if not i['rack'])
+    return JsonResponse({'items': items, 'last_imported_at': last, 'unplaced': unplaced})
 
 
 def field_asset_dict(asset):
-    return {f: getattr(asset, f) for f in FIELD_ASSET_FIELDS}
+    d = {f: getattr(asset, f) for f in FIELD_ASSET_FIELDS}
+    d['rack'] = rack_link(rack_servers_by_field_asset({asset.id}).get(asset.id))
+    return d
 
 
 @api('POST')
@@ -396,8 +402,17 @@ def update_field_asset(request, asset_id):
     asset = FieldAsset.objects.get(id=asset_id)
     for k, v in clean_field_asset(body(request), asset).items():
         setattr(asset, k, v)
-    asset.save()
+    with transaction.atomic():
+        asset.save()
+        sync_rack_server(asset)  # 랙에 배치된 장비면 랙 쪽 값도 같이 바꾼다
     return JsonResponse(field_asset_dict(asset))
+
+
+@api('POST')
+def place_field_assets_view(request):
+    """아직 랙에 없는 현장 장비를 랙에 임시 배치. mode=preview 이면 결과만 돌려준다."""
+    preview = body(request).get('mode') == 'preview'
+    return JsonResponse(place_field_assets(dry_run=preview))
 
 
 @api('DELETE')
