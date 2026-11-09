@@ -1,4 +1,5 @@
 import React from 'react';
+import { primaryIp } from '../utils/server';
 import { Server, CheckCircle, Clock, AlertTriangle, Info, MapPin } from 'lucide-react';
 
 export default function Dashboard({ stats, onOpenStatus }) {
@@ -53,7 +54,7 @@ export default function Dashboard({ stats, onOpenStatus }) {
           <div className="p-4 max-h-[300px] overflow-y-auto">
             {stats.maintList.length === 0 ? <p className="text-emerald-600 font-bold text-center py-8">현재 장애가 없습니다.</p> : stats.maintList.map(server => (
               <div key={server.id} className="bg-white border border-red-100 p-4 rounded-xl mb-3">
-                <div className="flex justify-between"><b className="font-mono text-sm">{server.hostname}</b><span className="text-[10px] font-mono">{server.specs?.ip}</span></div>
+                <div className="flex justify-between"><b className="font-mono text-sm">{server.hostname}</b><span className="text-[10px] font-mono">{primaryIp(server)}</span></div>
                 <p className="text-xs text-slate-500 mt-1 flex items-center"><MapPin size={12} className="mr-1" />{server.locationPath}</p>
                 <p className="text-sm text-red-700 mt-2">{server.description || '내용 없음'}</p>
               </div>

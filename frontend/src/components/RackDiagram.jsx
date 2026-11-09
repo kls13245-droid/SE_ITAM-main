@@ -1,4 +1,5 @@
 import React from 'react';
+import { matchesSearch } from '../utils/server';
 import { AlignJustify, Copy, Plus, Server, Network, Database } from 'lucide-react';
 
 const U_HEIGHT = 20;
@@ -53,11 +54,7 @@ export default function RackDiagram({
   const term = searchTerm.toLowerCase();
   const units = Array.from({ length: totalU }, (_, i) => totalU - i);
 
-  const isMatch = (server) =>
-    !term ||
-    (server.hostname && server.hostname.toLowerCase().includes(term)) ||
-    (server.model_name && server.model_name.toLowerCase().includes(term)) ||
-    (server.specs?.ip && server.specs.ip.includes(term));
+  const isMatch = (server) => !term.trim() || matchesSearch(server, term);
 
   return (
     <div id="rack-panel-wrapper" className="w-full lg:w-96 flex flex-col h-full bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden shrink-0">

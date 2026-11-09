@@ -1,138 +1,325 @@
 import json
 from functools import wraps
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
+
 from django.contrib.auth import authenticate, login, logout
-from .models import Campus, Building, Rack, ServerAsset
+from django.core.exceptions import ObjectDoesNotExist
+from django.db import transaction
+from django.db.models import Prefetch
+from django.http import HttpResponse, JsonResponse
+from django.middleware.csrf import get_token
+from django.views.decorators.csrf import ensure_csrf_cookie
 
-def login_required_api(view):
-    @wraps(view)
-    def _wrapped(request, *args, **kwargs):
-        if not request.user.is_authenticated:
-            return JsonResponse({"error": "로그인이 필요합니다."}, status=401)
-        return view(request, *args, **kwargs)
-    return _wrapped
+from .models import Building, Campus, Rack, ServerAsset
+from .services import (
+    ValidationError, parse_csv, template_csv, to_int, validate_import, validate_server_payload,
+)
 
-@csrf_exempt
-@login_required_api
+SERVER_FIELDS = ('id', 'hostname', 'start_u', 'size_u', 'status', 'model_name',
+                 'setup_year', 'description', 'specs', 'os_version')
+
+
+def error(message, status=400, **extra):
+    return JsonResponse({'error': message, **extra}, status=status)
+
+
+def api(*methods, auth=True):
+    """API 공통 처리: 로그인 확인, HTTP 메서드 확인, 흔한 예외를 JSON 오류로 변환.
+
+    CSRF는 Django 미들웨어가 검사한다 (프론트는 X-CSRFToken 헤더로 토큰을 보냄).
+    """
+    def decorator(view):
+        @wraps(view)
+        def wrapped(request, *args, **kwargs):
+            if auth and not request.user.is_authenticated:
+                return error('로그인이 필요합니다.', 401)
+            if methods and request.method not in methods:
+                return error('잘못된 요청입니다.', 405)
+            try:
+                return view(request, *args, **kwargs)
+            except ObjectDoesNotExist:
+                return error('대상을 찾을 수 없습니다. 다른 사용자가 먼저 삭제했을 수 있습니다. 새로고침해 주세요.', 404)
+            except ValidationError as e:
+                return error(str(e), 400)
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+                return error(f'요청 형식이 올바르지 않습니다: {e}', 400)
+        return wrapped
+    return decorator
+
+
+def body(request):
+    return json.loads(request.body or b'{}')
+
+
+def server_dict(server):
+    return {f: getattr(server, f) for f in SERVER_FIELDS}
+
+
+# ---------------------------------------------------------------------------
+# 인증
+# ---------------------------------------------------------------------------
+@ensure_csrf_cookie
+@api('GET', auth=False)
+def api_csrf(request):
+    """프론트가 처음 뜰 때 CSRF 토큰을 받아 가는 용도."""
+    return JsonResponse({'csrf_token': get_token(request)})
+
+
+@api('POST', auth=False)
+def api_login(request):
+    data = body(request)
+    user = authenticate(username=data.get('username'), password=data.get('password'))
+    if user is None:
+        return error('아이디 또는 비밀번호가 틀렸습니다.', 401)
+    login(request, user)
+    # 로그인하면 CSRF 토큰이 새로 바뀌므로 새 토큰을 함께 돌려준다
+    return JsonResponse({'success': True, 'username': user.username, 'csrf_token': get_token(request)})
+
+
+@api('POST', auth=False)
+def api_logout(request):
+    logout(request)
+    return JsonResponse({'success': True})
+
+
+@api('GET', auth=False)
+def api_me(request):
+    if request.user.is_authenticated:
+        return JsonResponse({'authenticated': True, 'username': request.user.username})
+    return JsonResponse({'authenticated': False}, status=401)
+
+
+# ---------------------------------------------------------------------------
+# 조회
+# ---------------------------------------------------------------------------
+@api('GET')
 def api_site_data(request):
-    data = []
-    campuses = Campus.objects.all()
-    for campus in campuses:
-        campus_data = {'id': campus.id, 'name': campus.name, 'buildings': []}
-        buildings = Building.objects.filter(campus=campus)
-        for building in buildings:
-            building_data = {'id': building.id, 'name': building.name, 'racks': []}
-            racks = Rack.objects.filter(building=building)
-            for rack in racks:
-                rack_data = {
-                    'id': rack.id, 'name': rack.name, 'location': rack.location,
-                    'total_u_space': rack.total_u_space,
-                    'servers': list(ServerAsset.objects.filter(rack=rack).values(
-                        'id', 'hostname', 'start_u', 'size_u', 'status',
-                        'model_name', 'setup_year', 'description', 'specs', 'os_version'
-                    ))
-                }
-                building_data['racks'].append(rack_data)
-            campus_data['buildings'].append(building_data)
-        data.append(campus_data)
+    # 예전에는 랙마다 쿼리를 따로 보내 장비가 많아지면 느려졌다. 4개 쿼리로 한 번에 읽는다.
+    campuses = Campus.objects.prefetch_related(
+        Prefetch('buildings', queryset=Building.objects.order_by('id')),
+        Prefetch('buildings__racks', queryset=Rack.objects.order_by('id')),
+        Prefetch('buildings__racks__servers', queryset=ServerAsset.objects.order_by('id')),
+    ).order_by('id')
+    data = [{
+        'id': c.id, 'name': c.name,
+        'buildings': [{
+            'id': b.id, 'name': b.name,
+            'racks': [{
+                'id': r.id, 'name': r.name, 'location': r.location, 'total_u_space': r.total_u_space,
+                'servers': [server_dict(s) for s in r.servers.all()],
+            } for r in b.racks.all()],
+        } for b in c.buildings.all()],
+    } for c in campuses]
     return JsonResponse(data, safe=False)
 
-@csrf_exempt
-@login_required_api
+
+# ---------------------------------------------------------------------------
+# 캠퍼스 / 건물 / 랙
+# ---------------------------------------------------------------------------
+def _name(data):
+    name = (data.get('name') or '').strip()
+    if not name:
+        raise ValidationError('이름을 입력해 주세요.')
+    return name
+
+
+@api('POST')
 def add_campus(request):
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            campus = Campus.objects.create(name=data['name'])
-            return JsonResponse({'id': campus.id, 'name': campus.name, 'buildings': []})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
+    campus = Campus.objects.create(name=_name(body(request)))
+    return JsonResponse({'id': campus.id, 'name': campus.name, 'buildings': []})
 
-@csrf_exempt
-@login_required_api
+
+@api('PUT')
+def update_campus(request, campus_id):
+    campus = Campus.objects.get(id=campus_id)
+    campus.name = _name(body(request))
+    campus.save()
+    return JsonResponse({'id': campus.id, 'name': campus.name})
+
+
+@api('DELETE')
+def delete_campus(request, campus_id):
+    campus = Campus.objects.get(id=campus_id)
+    count = ServerAsset.objects.filter(rack__building__campus=campus).count()
+    if count:
+        return error(f'이 캠퍼스의 랙에 장비 {count}대가 남아 있어 삭제할 수 없습니다. 장비를 먼저 옮기거나 삭제해 주세요.', 409, server_count=count)
+    campus.delete()
+    return JsonResponse({'message': 'Deleted'})
+
+
+@api('POST')
 def add_building(request):
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            campus = Campus.objects.get(id=data['campus_id'])
-            building = Building.objects.create(campus=campus, name=data['name'])
-            return JsonResponse({'id': building.id, 'name': building.name, 'racks': []})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
+    data = body(request)
+    campus = Campus.objects.get(id=data['campus_id'])
+    building = Building.objects.create(campus=campus, name=_name(data))
+    return JsonResponse({'id': building.id, 'name': building.name, 'racks': []})
 
-@csrf_exempt
-@login_required_api
+
+@api('PUT')
+def update_building(request, building_id):
+    building = Building.objects.get(id=building_id)
+    building.name = _name(body(request))
+    building.save()
+    return JsonResponse({'id': building.id, 'name': building.name})
+
+
+@api('DELETE')
+def delete_building(request, building_id):
+    building = Building.objects.get(id=building_id)
+    count = ServerAsset.objects.filter(rack__building=building).count()
+    if count:
+        return error(f'이 건물의 랙에 장비 {count}대가 남아 있어 삭제할 수 없습니다. 장비를 먼저 옮기거나 삭제해 주세요.', 409, server_count=count)
+    building.delete()
+    return JsonResponse({'message': 'Deleted'})
+
+
+def _rack_height(value, rack=None):
+    total = to_int(value, '랙 높이(U)', required=True, minimum=1)
+    if total > 60:
+        raise ValidationError('랙 높이는 60U 이하로 입력해 주세요.')
+    if rack:
+        top = max((s.start_u + (s.size_u or 1) - 1 for s in rack.servers.all() if s.start_u), default=0)
+        if top > total:
+            raise ValidationError(f'U{top}까지 장비가 실장되어 있어 {total}U로 줄일 수 없습니다.')
+    return total
+
+
+@api('POST')
 def add_rack(request):
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            building = Building.objects.get(id=data['building_id'])
-            rack = Rack.objects.create(
-                building=building, name=data['name'],
-                location=data.get('location', ''), total_u_space=data.get('total_u_space', 42)
-            )
-            return JsonResponse({'id': rack.id, 'name': rack.name, 'location': rack.location, 'total_u_space': rack.total_u_space, 'servers': []})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
+    data = body(request)
+    building = Building.objects.get(id=data['building_id'])
+    rack = Rack.objects.create(
+        building=building, name=_name(data),
+        location=data.get('location', ''), total_u_space=_rack_height(data.get('total_u_space', 42)),
+    )
+    return JsonResponse({'id': rack.id, 'name': rack.name, 'location': rack.location,
+                         'total_u_space': rack.total_u_space, 'servers': []})
 
-@csrf_exempt
-@login_required_api
+
+@api('PUT')
+def update_rack(request, rack_id):
+    rack = Rack.objects.get(id=rack_id)
+    data = body(request)
+    if 'name' in data:
+        rack.name = _name(data)
+    rack.location = data.get('location', rack.location)
+    if 'total_u_space' in data:
+        rack.total_u_space = _rack_height(data['total_u_space'], rack)
+    rack.save()
+    return JsonResponse({'id': rack.id, 'name': rack.name, 'location': rack.location,
+                         'total_u_space': rack.total_u_space})
+
+
+@api('DELETE')
+def delete_rack(request, rack_id):
+    rack = Rack.objects.get(id=rack_id)
+    count = rack.servers.count()
+    if count:
+        return error(f'이 랙에 장비 {count}대가 남아 있어 삭제할 수 없습니다. 장비를 먼저 옮기거나 삭제해 주세요.', 409, server_count=count)
+    rack.delete()
+    return JsonResponse({'message': 'Deleted'})
+
+
+# ---------------------------------------------------------------------------
+# 장비
+# ---------------------------------------------------------------------------
+@api('POST')
 def add_server(request):
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            server = ServerAsset.objects.create(
-                rack_id=data['rack_id'],
-                hostname=data.get('hostname', ''),
-                start_u=data['start_u'],
-                size_u=data.get('size_u', 1),
-                model_name=data.get('model_name', ''),
-                status=data.get('status', 'WAIT'),
-                setup_year=data.get('setup_year', ''),
-                description=data.get('description', ''),
-                specs=data.get('specs', {})
-            )
-            return JsonResponse({'id': server.id, 'message': 'Success'})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
+    data = body(request)
+    rack = Rack.objects.get(id=data['rack_id'])
+    with transaction.atomic():
+        Rack.objects.select_for_update().filter(id=rack.id).first()  # 동시에 같은 U에 넣는 것 방지
+        clean = validate_server_payload(rack, data)
+        server = ServerAsset.objects.create(
+            rack=rack, model_name=data.get('model_name', ''),
+            setup_year=data.get('setup_year', ''), description=data.get('description', ''),
+            **clean,
+        )
+    return JsonResponse({**server_dict(server), 'message': 'Success'})
 
-@csrf_exempt
-@login_required_api
+
+@api('PUT')
 def update_server(request, server_id):
-    if request.method == 'PUT':
-        try:
-            data = json.loads(request.body)
-            server = ServerAsset.objects.get(id=server_id)
-            server.start_u = data.get('start_u', server.start_u)
-            server.size_u = data.get('size_u', server.size_u)
-            server.hostname = data.get('hostname', server.hostname)
-            server.model_name = data.get('model_name', server.model_name)
-            server.status = data.get('status', server.status)
-            server.setup_year = data.get('setup_year', server.setup_year)
-            server.description = data.get('description', server.description)
-            server.specs = data.get('specs', server.specs)
-            server.save()
-            return JsonResponse({'id': server.id, 'message': 'Updated successfully'})
-        except ServerAsset.DoesNotExist:
-            return JsonResponse({'error': 'Server not found'}, status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
+    server = ServerAsset.objects.get(id=server_id)
+    data = body(request)
+    merged = {
+        'hostname': data.get('hostname', server.hostname),
+        'start_u': data.get('start_u', server.start_u),
+        'size_u': data.get('size_u', server.size_u),
+        'status': data.get('status', server.status),
+        'model_name': data.get('model_name', server.model_name),
+        'specs': data.get('specs', server.specs),
+        'os_version': data.get('os_version', server.os_version),
+    }
+    # 화면은 OS 버전을 specs에 넣어 보내므로 specs 값이 있으면 그걸 우선한다
+    if isinstance(merged['specs'], dict) and merged['specs'].get('os_version'):
+        merged['os_version'] = merged['specs']['os_version']
+    with transaction.atomic():
+        Rack.objects.select_for_update().filter(id=server.rack_id).first()
+        clean = validate_server_payload(server.rack, merged, exclude_id=server.id)
+        for k, v in clean.items():
+            setattr(server, k, v)
+        server.model_name = merged['model_name']
+        server.setup_year = data.get('setup_year', server.setup_year)
+        server.description = data.get('description', server.description)
+        server.save()
+    return JsonResponse({**server_dict(server), 'message': 'Updated successfully'})
 
-@csrf_exempt
-@login_required_api
+
+@api('DELETE')
 def delete_server(request, server_id):
-    if request.method == 'DELETE':
-        try:
-            server = ServerAsset.objects.get(id=server_id)
-            server.delete()
-            return JsonResponse({'message': 'Deleted'})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
+    ServerAsset.objects.get(id=server_id).delete()
+    return JsonResponse({'message': 'Deleted'})
 
-# ⭐️ 신규 업데이트: 극강의 예외 처리가 포함된 이력 조회 API
-@csrf_exempt
-@login_required_api
+
+# ---------------------------------------------------------------------------
+# CSV 가져오기
+# ---------------------------------------------------------------------------
+@api('GET')
+def import_template(request):
+    resp = HttpResponse(template_csv(), content_type='text/csv; charset=utf-8')
+    resp['Content-Disposition'] = 'attachment; filename="rack_import_template.csv"'
+    return resp
+
+
+@api('POST')
+def import_servers(request):
+    """multipart: file, rack_id, mode=preview|commit
+
+    preview: 검증 결과만 돌려준다 (저장 안 함)
+    commit : 다시 검증한 뒤 오류 없는 행만 한 번에 저장한다
+    """
+    rack = Rack.objects.get(id=request.POST['rack_id'])
+    upload = request.FILES.get('file')
+    if not upload:
+        raise ValidationError('CSV 파일을 선택해 주세요.')
+    if upload.size > 2 * 1024 * 1024:
+        raise ValidationError('파일이 너무 큽니다. (최대 2MB)')
+    parsed, unknown = parse_csv(upload.read())
+    mode = request.POST.get('mode', 'preview')
+
+    with transaction.atomic():
+        Rack.objects.select_for_update().filter(id=rack.id).first()
+        results = validate_import(rack, parsed)
+        valid = [r for r in results if not r['errors']]
+        created = 0
+        if mode == 'commit':
+            for r in valid:
+                ServerAsset.objects.create(rack=rack, **r['data'])
+                created += 1
+
+    return JsonResponse({
+        'mode': mode,
+        'rack': {'id': rack.id, 'name': rack.name, 'total_u_space': rack.total_u_space},
+        'total': len(results),
+        'valid': len(valid),
+        'invalid': len(results) - len(valid),
+        'created': created,
+        'unknown_columns': unknown,
+        'rows': [{k: v for k, v in r.items() if k != 'data'} for r in results],
+    })
+
+
+@api('GET')
 def get_server_history(request, server_id):
     try:
         server = ServerAsset.objects.get(id=server_id)
@@ -183,141 +370,3 @@ def get_server_history(request, server_id):
         return JsonResponse({'error': '해당 장비를 찾을 수 없습니다.'}, status=404)
     except Exception as e:
         return JsonResponse({'error': f"서버 내부 오류: {str(e)}"}, status=500)
-
-@csrf_exempt
-def api_login(request):
-    """리액트 프론트엔드에서 넘어온 ID/PW를 장고 Admin 계정으로 검증하는 API"""
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            username = data.get('username')
-            password = data.get('password')
-            
-            # 장고에 기본 내장된 함수로 DB에 있는 Admin 계정인지 검증합니다.
-            user = authenticate(username=username, password=password)
-            
-            if user is not None:
-                login(request, user) # 세션 생성
-                return JsonResponse({'success': True, 'username': user.username})
-            else:
-                return JsonResponse({'error': '아이디 또는 비밀번호가 틀렸습니다.'}, status=401)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
-            
-    return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
-
-@csrf_exempt
-def api_logout(request):
-    logout(request)
-    return JsonResponse({"success": True})
-
-@csrf_exempt
-def api_me(request):
-    if request.user.is_authenticated:
-        return JsonResponse({"authenticated": True, "username": request.user.username})
-    return JsonResponse({"authenticated": False}, status=401)
-
-@csrf_exempt
-@login_required_api
-def update_campus(request, campus_id):
-    if request.method != 'PUT':
-        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
-    campus = Campus.objects.get(id=campus_id)
-    data = json.loads(request.body)
-    campus.name = data.get('name', campus.name)
-    campus.save()
-    return JsonResponse({'id': campus.id, 'name': campus.name})
-
-@csrf_exempt
-@login_required_api
-def delete_campus(request, campus_id):
-    if request.method != 'DELETE':
-        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
-    Campus.objects.get(id=campus_id).delete()
-    return JsonResponse({'message': 'Deleted'})
-
-@csrf_exempt
-@login_required_api
-def update_building(request, building_id):
-    if request.method != 'PUT':
-        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
-    building = Building.objects.get(id=building_id)
-    data = json.loads(request.body)
-    building.name = data.get('name', building.name)
-    building.save()
-    return JsonResponse({'id': building.id, 'name': building.name})
-
-@csrf_exempt
-@login_required_api
-def delete_building(request, building_id):
-    if request.method != 'DELETE':
-        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
-    Building.objects.get(id=building_id).delete()
-    return JsonResponse({'message': 'Deleted'})
-
-@csrf_exempt
-@login_required_api
-def update_rack(request, rack_id):
-    if request.method != 'PUT':
-        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
-    rack = Rack.objects.get(id=rack_id)
-    data = json.loads(request.body)
-    rack.name = data.get('name', rack.name)
-    rack.location = data.get('location', rack.location)
-    rack.total_u_space = data.get('total_u_space', rack.total_u_space)
-    rack.save()
-    return JsonResponse({'id': rack.id, 'name': rack.name, 'location': rack.location, 'total_u_space': rack.total_u_space})
-
-@csrf_exempt
-@login_required_api
-def delete_rack(request, rack_id):
-    if request.method != 'DELETE':
-        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
-    Rack.objects.get(id=rack_id).delete()
-    return JsonResponse({'message': 'Deleted'})
-
-MODEL_SIZE_MAP = [
-    ("R760XA", 2), ("R760", 2), ("R660XS", 1), ("R660", 1), ("R7715", 2), ("R470", 1), ("R360", 1),
-    ("DL380", 2), ("DL360", 1), ("DL320", 1), ("DL20", 1),
-    ("A400", 4), ("A250", 2), ("FAS2820", 2), ("FAS7200", 6),
-    ("UNITY380", 2), ("POWERSCALE", 4), ("H700", 4), ("X20", 3),
-    ("MDS9148", 1), ("MDS9132", 1), ("S5148", 1), ("S4148", 1), ("S5248", 1), ("S3248", 1),
-    ("JL814A", 1), ("7010TX", 1), ("7050SX", 1), ("THUNDER", 1), ("CL5716", 1),
-    ("R650", 1), ("R750", 2), ("R2500", 1), ("EF300", 2), ("KVM", 1),
-]
-
-def guess_size_u(model_name):
-    name = (model_name or "").upper().replace(" ", "").replace("-", "").replace("_", "")
-    for key, size in MODEL_SIZE_MAP:
-        if key in name:
-            return size
-    return 1
-
-@csrf_exempt
-@login_required_api
-def import_servers(request):
-    if request.method != 'POST':
-        return JsonResponse({'error': '잘못된 요청입니다.'}, status=405)
-    data = json.loads(request.body)
-    rack_id = data.get('rack_id')
-    rows = data.get('rows', [])
-    created = 0
-    for row in rows:
-        if not row.get('hostname'):
-            continue
-        ServerAsset.objects.create(
-            rack_id=rack_id,
-            hostname=row.get('hostname', ''),
-            model_name=row.get('model_name', ''),
-            status=row.get('status') or 'WAIT',
-            start_u=int(row.get('start_u') or 1),
-            size_u=int(row.get('size_u') or guess_size_u(row.get('model_name'))),
-            specs={
-                'power_w': row.get('power_w', ''),
-                'public_ip': row.get('public_ip', ''),
-                'private_ip': row.get('private_ip', ''),
-                'mgmt_ip': row.get('mgmt_ip', ''),
-            }
-        )
-        created += 1
-    return JsonResponse({'created': created})
