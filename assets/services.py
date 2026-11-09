@@ -377,10 +377,13 @@ def _parse_date(value, label):
 
 
 def import_field_assets(raw: bytes, dry_run=False):
-    """monday에서 내보낸 PM 현황 CSV를 현장 장비로 반영한다.
+    """PM 현황 양식(monday와 같은 열)의 CSV를 현장 장비로 반영한다.
 
-    monday ID가 같은 장비는 갱신, 없으면 새로 만든다. (호스트명은 현장마다 겹칠 수 있어 기준으로 쓰지 않음)
-    파일에 없는 기존 장비는 지우지 않는다. ITAM에서 직접 고친 장비(locally_modified)는 건너뛴다.
+    - monday ID가 있는 행: 같은 ID의 장비를 갱신, 없으면 새로 만든다.
+      ITAM에서 직접 고친 장비(locally_modified)는 덮어쓰지 않는다.
+    - monday ID가 없는 행(직접 작성한 파일): 새 장비로 추가한다.
+      같은 현장에 같은 호스트명이 이미 있거나 파일 안에서 겹치면 '중복'으로 건너뛴다.
+    - 파일에 없는 기존 장비는 지우지 않는다.
     """
     from django.db import transaction
     from django.utils import timezone
@@ -392,11 +395,15 @@ def import_field_assets(raw: bytes, dry_run=False):
         raise ValidationError("CSV 파일이 비어 있습니다.")
     keys = [FIELD_HEADER_MAP.get(_norm_header(h)) for h in rows[0]]
     if "hostname" not in keys:
-        raise ValidationError("hostname(또는 Hostname) 열이 없습니다. monday에서 받은 PM 현황 파일인지 확인해 주세요.")
+        raise ValidationError("첫 줄에 Hostname 열이 없습니다. '양식 내려받기'로 받은 파일의 열 이름을 확인해 주세요.")
+
+    def dup_key(hostname, site):
+        return (hostname.strip().lower(), re.sub(r"\s+", " ", (site or "").strip().lower()))
 
     now = timezone.now()
     created = updated = kept = 0
-    errors = []
+    errors, duplicates = [], []
+    seen = {}  # 이 파일에서 이미 나온 (호스트명, 현장) → 행 번호
     with transaction.atomic():
         for line_no, cols in enumerate(rows[1:], start=2):
             item = {}
@@ -405,34 +412,75 @@ def import_field_assets(raw: bytes, dry_run=False):
                     item[k] = v.strip()
             try:
                 if not item.get("hostname"):
-                    raise ValidationError("hostname이 비어 있습니다.")
+                    raise ValidationError("Hostname이 비어 있습니다.")
                 values = {
                     k: item.get(k, "") for k in (
                         "hostname", "site_group", "complex", "product", "status", "model_name",
                         "serial_number", "ipmi_ip", "public_ip", "private_ip", "ipmi_status", "pm_status", "note")
                 }
+                values["status"] = _choice(values["status"], FIELD_STATUSES, "상태")
+                values["ipmi_status"] = _choice(values["ipmi_status"], IPMI_STATUSES, "IPMI 상태")
+                values["pm_status"] = _choice(values["pm_status"], ("완료", "확인 필요", "미사용"), "PM 상태")
                 values["pm_date"] = _parse_date(item.get("pm_date"), "PM 날짜")
                 values["warranty_end"] = _parse_date(item.get("warranty_end"), "워런티 종료")
-                values["health"] = {p: item.get(p, "") for p in FieldAsset.HEALTH_PARTS}
+                values["health"] = clean_health(item, FieldAsset.HEALTH_PARTS)
                 values["imported_at"] = now
+
                 mid = item.get("monday_item_id") or None
                 existing = FieldAsset.objects.filter(monday_item_id=mid).first() if mid else None
-                if existing and existing.locally_modified:
-                    kept += 1  # ITAM에서 고친 장비는 그대로 둔다
-                    continue
                 if existing:
-                    for k, v in values.items():
-                        setattr(existing, k, v)
-                    existing.save()
-                    updated += 1
-                else:
-                    FieldAsset.objects.create(monday_item_id=mid, **values)
-                    created += 1
+                    if existing.locally_modified:
+                        kept += 1  # ITAM에서 고친 장비는 그대로 둔다
+                    else:
+                        for k, v in values.items():
+                            setattr(existing, k, v)
+                        existing.save()
+                        updated += 1
+                    continue
+
+                if not mid:
+                    key = dup_key(values["hostname"], values["site_group"])
+                    where = values["site_group"] or "현장 미지정"
+                    if key in seen:
+                        duplicates.append({"line": line_no, "hostname": values["hostname"], "site_group": where,
+                                           "reason": f"파일 안 {seen[key]}행과 같은 현장·호스트명"})
+                        continue
+                    seen[key] = line_no
+                    same = [a for a in FieldAsset.objects.filter(hostname__iexact=values["hostname"].strip())
+                            if dup_key(a.hostname, a.site_group) == key]
+                    if same:
+                        duplicates.append({"line": line_no, "hostname": values["hostname"], "site_group": where,
+                                           "reason": "같은 현장에 같은 호스트명의 장비가 이미 있음"})
+                        continue
+                    values["locally_modified"] = True  # monday와 무관하게 ITAM에서 등록한 장비
+
+                FieldAsset.objects.create(monday_item_id=mid, **values)
+                created += 1
             except ValidationError as e:
                 errors.append({"line": line_no, "hostname": item.get("hostname", ""), "error": str(e)})
         if dry_run:
             transaction.set_rollback(True)
-    return {"created": created, "updated": updated, "kept": kept, "errors": errors, "total": len(rows) - 1}
+    return {"created": created, "updated": updated, "kept": kept, "duplicates": duplicates,
+            "errors": errors, "total": len(rows) - 1}
+
+
+# 직접 작성용 양식 (monday PM 현황과 같은 열 + 맨 끝에 선택 항목 monday ID)
+FIELD_TEMPLATE_COLUMNS = [
+    ("Hostname", "P1D-DB-A"), ("그룹(현장/제품)", "P1D DM"), ("단지", "Memory"), ("제품명", "DM"),
+    ("상태", "가동"), ("Model", "DL360 Gen10"), ("S/N", "SGH123ABCD"), ("IPMI IP", "100.100.110.1"),
+    ("Public IP", "10.120.13.10"), ("Private IP", "100.100.100.1"), ("IPMI 상태", "접속 가능"),
+    ("PM 날짜", "2026-11-09"), ("PM 상태", "완료"), ("워런티 종료", "2028-12-31"),
+    ("CPU", "정상"), ("Memory", "정상"), ("Network", "정상"), ("DISK", "정상"), ("Fans", "정상"),
+    ("Cache Battery", "정상"), ("비고", "신규 설치"), ("monday ID", ""),
+]
+
+
+def field_template_csv():
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([c for c, _ in FIELD_TEMPLATE_COLUMNS])
+    w.writerow([e for _, e in FIELD_TEMPLATE_COLUMNS])
+    return "\ufeff" + out.getvalue()
 
 
 # ---------------------------------------------------------------------------
