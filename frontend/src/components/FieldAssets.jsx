@@ -4,7 +4,7 @@ import {
   MapPin, Search, Upload, Download, X, ExternalLink, AlertTriangle, CheckCircle,
   Wrench, Wifi, ClipboardList, Server, ChevronUp, ChevronDown, Plus, Pencil, Trash2,
 } from 'lucide-react';
-import { apiJson, jsonBody } from '../api/client';
+import { apiJson, jsonBody, API_BASE_URL } from '../api/client';
 import FieldAssetForm, { PMRecordForm, PMRecordList } from './FieldAssetForm';
 import { PARTS, STATUS_STYLE } from './fieldAssetConstants';
 
@@ -148,7 +148,8 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
     setImportState(s => ({ ...s, busy: true }));
     sendImport(importState.file, 'commit')
       .then(r => {
-        showToast(`신규 ${r.created}대, 갱신 ${r.updated}대를 반영했습니다.${r.kept ? ` (ITAM에서 수정한 ${r.kept}대는 유지)` : ''}`);
+        const extra = [r.kept && `ITAM 수정분 ${r.kept}대 유지`, r.duplicates?.length && `중복 ${r.duplicates.length}건 제외`].filter(Boolean).join(', ');
+        showToast(`신규 ${r.created}대, 갱신 ${r.updated}대를 반영했습니다.${extra ? ` (${extra})` : ''}`);
         setImportState(null); load();
       })
       .catch(err => { showToast(err.message, 'error'); setImportState(s => ({ ...s, busy: false })); });
@@ -163,7 +164,7 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
         <div>
           <h2 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center"><MapPin className="text-orange-500 mr-2" size={22} /> 현장 장비 (PM 현황)</h2>
           <p className="text-slate-500 text-sm mt-1">
-            고객사 현장에 설치된 장비입니다. 랙 실장도와는 별도로 관리합니다. · monday 'SE파트 - PM 현황' 기준 · 마지막 가져온 시각 <b>{fmtDateTime(data.last_imported_at)}</b>
+            고객사 현장에 설치된 장비입니다. 랙 실장도와는 별도로 관리합니다. · 마지막 CSV 등록 <b>{fmtDateTime(data.last_imported_at)}</b>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -171,9 +172,13 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
             <Plus size={14} className="mr-1.5" /> 장비 추가
           </button>
           <label className="px-3 py-2 flex items-center bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold cursor-pointer">
-            <Upload size={14} className="mr-1.5" /> monday CSV 가져오기
+            <Upload size={14} className="mr-1.5" /> CSV로 등록
             <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { pickImportFile(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
+          <a href={`${API_BASE_URL}/api/field-assets/import/template/`} title="PM 현황(monday)과 같은 열의 빈 양식"
+            className="px-3 py-2 flex items-center bg-white text-slate-600 hover:bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold">
+            <Download size={14} className="mr-1.5" /> 등록 양식
+          </a>
           <button onClick={exportCsv} disabled={!rows.length} className="px-3 py-2 flex items-center bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold disabled:opacity-40">
             <Download size={14} className="mr-1.5" /> 보이는 목록 내보내기
           </button>
@@ -220,7 +225,7 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
           <div className="text-center text-slate-500 py-16 px-6">
             <MapPin size={40} className="mx-auto mb-3 text-slate-300" />
             <p className="font-bold text-slate-600">아직 가져온 현장 장비가 없습니다.</p>
-            <p className="text-sm mt-1">오른쪽 위 <b>monday CSV 가져오기</b>로 PM 현황 파일을 올려주세요.</p>
+            <p className="text-sm mt-1">오른쪽 위 <b>등록 양식</b>을 받아 작성한 뒤 <b>CSV로 등록</b>으로 올리거나, <b>장비 추가</b>로 한 대씩 등록하세요.</p>
           </div>
         ) : (
           <table className="w-full text-xs border-collapse">
@@ -386,21 +391,30 @@ function ImportConfirm({ state, onCancel, onCommit }) {
   const p = state.preview;
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl">
         <div className="p-5 border-b border-slate-100">
-          <h3 className="text-lg font-bold text-slate-800 flex items-center"><Upload size={18} className="mr-2 text-amber-600" /> monday CSV 가져오기</h3>
+          <h3 className="text-lg font-bold text-slate-800 flex items-center"><Upload size={18} className="mr-2 text-amber-600" /> CSV로 현장 장비 등록</h3>
           <p className="text-sm text-slate-500 mt-0.5 font-mono">{state.file.name}</p>
         </div>
         <div className="p-5 text-sm">
           {!p ? <p className="text-slate-500">확인 중...</p> : (
             <>
-              <div className="grid grid-cols-3 gap-2 text-center mb-3">
-                <div className="bg-emerald-50 rounded-lg p-3"><div className="text-2xl font-black text-emerald-600">{p.created}</div><div className="text-xs text-slate-500">신규</div></div>
+              <div className="grid grid-cols-4 gap-2 text-center mb-3">
+                <div className="bg-emerald-50 rounded-lg p-3"><div className="text-2xl font-black text-emerald-600">{p.created}</div><div className="text-xs text-slate-500">신규 등록</div></div>
                 <div className="bg-blue-50 rounded-lg p-3"><div className="text-2xl font-black text-blue-600">{p.updated}</div><div className="text-xs text-slate-500">갱신</div></div>
+                <div className="bg-amber-50 rounded-lg p-3"><div className="text-2xl font-black text-amber-600">{p.duplicates?.length || 0}</div><div className="text-xs text-slate-500">중복(제외)</div></div>
                 <div className="bg-red-50 rounded-lg p-3"><div className="text-2xl font-black text-red-600">{p.errors.length}</div><div className="text-xs text-slate-500">오류(제외)</div></div>
               </div>
-              <p className="text-slate-600">같은 monday ID의 장비는 새 값으로 갱신하고, 파일에 없는 기존 장비는 그대로 둡니다.</p>
-              {p.kept > 0 && <p className="text-violet-700 mt-1">ITAM에서 직접 수정한 장비 <b>{p.kept}대</b>는 덮어쓰지 않고 유지합니다.</p>}
+              <ul className="text-slate-600 text-xs space-y-0.5 list-disc pl-4">
+                <li>monday ID가 없는 행은 새 장비로 등록합니다. <b>같은 현장에 같은 호스트명</b>이 이미 있으면 중복으로 건너뜁니다.</li>
+                <li>monday ID가 있는 행은 같은 ID의 장비를 갱신합니다. 파일에 없는 기존 장비는 그대로 둡니다.</li>
+              </ul>
+              {p.kept > 0 && <p className="text-violet-700 mt-2 text-xs">ITAM에서 직접 수정한 장비 <b>{p.kept}대</b>는 덮어쓰지 않고 유지합니다.</p>}
+              {p.duplicates?.length > 0 && (
+                <ul className="mt-3 max-h-32 overflow-y-auto text-xs text-amber-800 bg-amber-50 rounded-lg p-2 space-y-0.5">
+                  {p.duplicates.map(d => <li key={d.line}>{d.line}행 {d.hostname} ({d.site_group}): {d.reason}</li>)}
+                </ul>
+              )}
               {p.errors.length > 0 && (
                 <ul className="mt-3 max-h-40 overflow-y-auto text-xs text-red-600 bg-red-50 rounded-lg p-2 space-y-0.5">
                   {p.errors.map(e => <li key={e.line}>{e.line}행 {e.hostname}: {e.error}</li>)}

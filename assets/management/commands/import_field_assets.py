@@ -1,4 +1,4 @@
-"""monday 'SE파트 - PM 현황' CSV를 현장 장비로 가져온다.
+"""PM 현황 양식(monday와 같은 열)의 CSV를 현장 장비로 가져온다.
 
 사용법:
     python manage.py import_field_assets monday_PM현황_20261109.csv
@@ -24,6 +24,9 @@ class Command(BaseCommand):
             raise CommandError(str(e))
         prefix = '[확인만] ' if dry_run else ''
         self.stdout.write(self.style.SUCCESS(
-            f"{prefix}전체 {result['total']}행: 신규 {result['created']}, 갱신 {result['updated']}, 오류 {len(result['errors'])}"))
+            f"{prefix}전체 {result['total']}행: 신규 {result['created']}, 갱신 {result['updated']}, "
+            f"ITAM 수정분 유지 {result['kept']}, 중복 {len(result['duplicates'])}, 오류 {len(result['errors'])}"))
+        for d in result['duplicates']:
+            self.stdout.write(self.style.WARNING(f"  [중복] {d['line']}행 {d['hostname']} ({d['site_group']}): {d['reason']}"))
         for e in result['errors']:
             self.stdout.write(self.style.WARNING(f"  {e['line']}행 {e['hostname']}: {e['error']}"))

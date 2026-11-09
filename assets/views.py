@@ -11,7 +11,8 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 
 from .models import Building, Campus, FieldAsset, PMRecord, Rack, ServerAsset
 from .services import (
-    ValidationError, clean_field_asset, clean_health, import_field_assets, parse_csv, refresh_asset_pm,
+    ValidationError, clean_field_asset, clean_health, field_template_csv, import_field_assets, parse_csv,
+    refresh_asset_pm,
     template_csv, to_int, validate_import, validate_server_payload, _parse_date,
 )
 
@@ -444,6 +445,13 @@ def delete_pm_record(request, record_id):
     record.delete()
     refresh_asset_pm(asset)  # 남은 기록 중 최신 것을 다시 반영
     return JsonResponse({'asset': field_asset_dict(asset)})
+
+
+@api('GET')
+def field_assets_template(request):
+    resp = HttpResponse(field_template_csv(), content_type='text/csv; charset=utf-8')
+    resp['Content-Disposition'] = 'attachment; filename="field_assets_template.csv"'
+    return resp
 
 
 @api('POST')

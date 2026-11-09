@@ -413,3 +413,42 @@ class AutoPlaceTest(BaseTest):
         r = self.post('/api/server/add/', {'rack_id': rack2.id, 'hostname': 'ControlPC', 'start_u': 1})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(self.add('controlpc', 5).status_code, 400)  # 같은 건물은 여전히 막음
+
+
+class FieldCsvRegisterTest(FieldAssetTest):
+    NO_ID = ('Hostname,그룹(현장/제품),단지,제품명,상태,PM 날짜,DISK\n'
+             'NEW-DB-A,P9 DM,Memory,DM,가동,2026-11-09,정상\n'
+             'ControlPC,P9 DM,Memory,DM,가동,,\n'
+             'NEW-DB-A,P9 DM,Memory,DM,가동,,\n')     # 파일 안 중복
+
+    def test_register_without_monday_id_and_dedupe(self):
+        r = self.upload_field(self.NO_ID).json()
+        self.assertEqual((r['created'], len(r['duplicates'])), (2, 1))
+        self.assertIn('파일 안 2행', r['duplicates'][0]['reason'])
+        a = FieldAsset.objects.get(hostname='NEW-DB-A')
+        self.assertTrue(a.locally_modified)
+        self.assertIsNone(a.monday_item_id)
+        # 같은 파일을 다시 올려도 늘어나지 않음
+        r = self.upload_field(self.NO_ID).json()
+        self.assertEqual((r['created'], len(r['duplicates'])), (0, 3))
+        self.assertEqual(FieldAsset.objects.filter(hostname='NEW-DB-A').count(), 1)
+
+    def test_same_hostname_other_site_is_allowed(self):
+        self.upload_field(self.CSV)  # ControlPC @ 1L DM, S5 DAQ
+        r = self.upload_field(self.NO_ID).json()
+        self.assertEqual(r['created'], 2)  # P9 DM 의 ControlPC 는 다른 현장이라 추가됨
+
+    def test_duplicate_match_ignores_case_and_spaces(self):
+        self.upload_field(self.NO_ID)
+        r = self.upload_field('Hostname,그룹(현장/제품)\nnew-db-a,P9  DM\n').json()
+        self.assertEqual((r['created'], len(r['duplicates'])), (0, 1))
+
+    def test_invalid_values_reported(self):
+        r = self.upload_field('Hostname,상태,IPMI 상태,PM 상태,DISK,PM 날짜\n'
+                              'A,가동중,,,,\nB,,연결됨,,,\nC,,,끝,,\nD,,,,고장,\nE,,,,,어제\nF,가동,,,,\n').json()
+        self.assertEqual((r['created'], len(r['errors'])), (1, 5))
+
+    def test_template_can_be_imported(self):
+        tpl = self.c.get('/api/field-assets/import/template/').content.decode('utf-8-sig')
+        r = self.upload_field(tpl).json()
+        self.assertEqual((r['created'], len(r['errors'])), (1, 0), r)
