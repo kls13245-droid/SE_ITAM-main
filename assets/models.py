@@ -83,6 +83,8 @@ class FieldAsset(models.Model):
     health = models.JSONField(default=dict, blank=True, verbose_name="부품 상태")
     note = models.TextField(blank=True, verbose_name="비고")
     imported_at = models.DateTimeField(null=True, blank=True, verbose_name="마지막 가져온 시각")
+    # ITAM에서 직접 고친 장비는 monday CSV를 다시 가져와도 덮어쓰지 않는다
+    locally_modified = models.BooleanField(default=False, verbose_name="ITAM에서 수정됨")
     history = HistoricalRecords()
 
     class Meta:
@@ -91,3 +93,27 @@ class FieldAsset(models.Model):
 
     def __str__(self):
         return f"{self.hostname} ({self.site_group})"
+
+
+class PMRecord(models.Model):
+    """현장 장비 PM(정기 점검) 기록. 점검할 때마다 한 건씩 쌓인다.
+
+    가장 최근 기록의 날짜·결과·부품 상태가 장비 목록의 PM 정보로 반영된다.
+    """
+    PM_STATUSES = ('완료', '확인 필요', '미사용')
+
+    asset = models.ForeignKey(FieldAsset, on_delete=models.CASCADE, related_name='pm_records', verbose_name="장비")
+    pm_date = models.DateField(verbose_name="점검일")
+    pm_status = models.CharField(max_length=20, default='완료', verbose_name="점검 결과")
+    health = models.JSONField(default=dict, blank=True, verbose_name="부품 상태")
+    worker = models.CharField(max_length=100, blank=True, verbose_name="작업자")
+    note = models.TextField(blank=True, verbose_name="작업 내용")
+    created_by = models.ForeignKey('auth.User', on_delete=models.SET_NULL, null=True, blank=True, verbose_name="입력자")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="입력 시각")
+
+    class Meta:
+        ordering = ['-pm_date', '-id']
+        verbose_name = verbose_name_plural = "PM 점검 기록"
+
+    def __str__(self):
+        return f"{self.asset.hostname} {self.pm_date} {self.pm_status}"

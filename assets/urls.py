@@ -32,6 +32,11 @@ urlpatterns = [
     # 현장 장비 (PM)
     path('api/field-assets/', views.field_assets, name='field_assets'),
     path('api/field-assets/import/', views.import_field_assets_view, name='import_field_assets'),
+    path('api/field-assets/add/', views.add_field_asset, name='add_field_asset'),
+    path('api/field-assets/update/<int:asset_id>/', views.update_field_asset, name='update_field_asset'),
+    path('api/field-assets/delete/<int:asset_id>/', views.delete_field_asset, name='delete_field_asset'),
+    path('api/field-assets/<int:asset_id>/pm/', views.field_asset_pm_records, name='field_asset_pm_records'),
+    path('api/field-assets/pm/delete/<int:record_id>/', views.delete_pm_record, name='delete_pm_record'),
 
     # 자산 변경 이력 조회 API
     path('api/server/history/<int:server_id>/', views.get_server_history, name='get_server_history'),
