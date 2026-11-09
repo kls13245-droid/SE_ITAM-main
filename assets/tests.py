@@ -9,7 +9,10 @@ from .models import Building, Campus, FieldAsset, PMRecord, Rack, ServerAsset
 
 class BaseTest(TestCase):
     def setUp(self):
-        User.objects.create_user('admin', password='pw')
+        from django.core.cache import cache
+        cache.clear()  # 관리자 비밀번호 실패 횟수 초기화
+        User.objects.create_user('admin', password='pw')  # 일반 사용자 (화면 로그인용)
+        User.objects.create_user('boss', password='bosspw', is_staff=True)  # 삭제 승인용 관리자
         # 실제 화면처럼 CSRF 검사를 켠 클라이언트
         self.c = Client(enforce_csrf_checks=True)
         self.token = self.c.get('/api/csrf/').json()['csrf_token']
@@ -25,8 +28,9 @@ class BaseTest(TestCase):
     def put(self, url, data):
         return self.c.put(url, json.dumps(data), content_type='application/json', HTTP_X_CSRFTOKEN=self.token)
 
-    def delete(self, url):
-        return self.c.delete(url, HTTP_X_CSRFTOKEN=self.token)
+    def delete(self, url, admin=('boss', 'bosspw')):
+        payload = {'admin_username': admin[0], 'admin_password': admin[1]} if admin else {}
+        return self.c.delete(url, json.dumps(payload), content_type='application/json', HTTP_X_CSRFTOKEN=self.token)
 
     def add(self, hostname, start_u, size_u=1, **kw):
         return self.post('/api/server/add/', {'rack_id': self.rack.id, 'hostname': hostname,
@@ -102,20 +106,50 @@ class OsVersionTest(BaseTest):
         self.assertEqual((s.os_version, s.specs['os_version']), ('RHEL 9', 'RHEL 9'))
 
 
-class DeleteGuardTest(BaseTest):
-    def test_rack_with_servers_not_deleted(self):
-        self.add('a', 1)
+class AdminDeleteTest(BaseTest):
+    def test_delete_requires_admin_credentials(self):
+        sid = self.add('a', 1).json()['id']
+        url = f'/api/server/delete/{sid}/'
+        self.assertEqual(self.delete(url, admin=None).status_code, 403)
+        self.assertEqual(self.delete(url, admin=('boss', 'wrong')).status_code, 403)
+        r = self.delete(url, admin=('admin', 'pw'))  # 비밀번호는 맞지만 관리자 아님
+        self.assertEqual(r.status_code, 403)
+        self.assertIn('관리자 권한', r.json()['error'])
+        self.assertTrue(ServerAsset.objects.filter(id=sid).exists())
+        r = self.delete(url)
+        self.assertEqual((r.status_code, r.json()['approved_by']), (200, 'boss'))
+        self.assertFalse(ServerAsset.objects.filter(id=sid).exists())
+
+    def test_rack_building_campus_delete_removes_servers(self):
+        self.add('a', 1); self.add('b', 5)
         r = self.delete(f'/api/rack/delete/{self.rack.id}/')
-        self.assertEqual(r.status_code, 409)
-        self.assertTrue(Rack.objects.filter(id=self.rack.id).exists())
+        self.assertEqual((r.status_code, r.json()['deleted_servers']), (200, 2))
+        self.assertEqual(ServerAsset.objects.count(), 0)  # 미실장으로 남지 않음
+        rack2 = Rack.objects.create(building=self.building, name='R2')
+        ServerAsset.objects.create(rack=rack2, hostname='c', model_name='m', start_u=1)
+        self.assertEqual(self.delete(f'/api/campus/delete/{self.campus.id}/').json()['deleted_servers'], 1)
+        self.assertEqual((Campus.objects.count(), Building.objects.count(), Rack.objects.count(), ServerAsset.objects.count()), (0, 0, 0, 0))
 
-    def test_building_and_campus_with_servers_not_deleted(self):
+    def test_wrong_password_does_not_delete_campus(self):
         self.add('a', 1)
-        self.assertEqual(self.delete(f'/api/building/delete/{self.building.id}/').status_code, 409)
-        self.assertEqual(self.delete(f'/api/campus/delete/{self.campus.id}/').status_code, 409)
+        self.assertEqual(self.delete(f'/api/campus/delete/{self.campus.id}/', admin=('boss', 'x')).status_code, 403)
+        self.assertEqual(ServerAsset.objects.count(), 1)
 
-    def test_empty_rack_deleted(self):
-        self.assertEqual(self.delete(f'/api/rack/delete/{self.rack.id}/').status_code, 200)
+    def test_lockout_after_repeated_failures(self):
+        from django.core.cache import cache
+        cache.clear()
+        url = f'/api/rack/delete/{self.rack.id}/'
+        for _ in range(5):
+            self.delete(url, admin=('boss', 'x'))
+        r = self.delete(url)  # 맞는 비밀번호도 잠시 막힘
+        self.assertEqual(r.status_code, 403)
+        self.assertIn('5분', r.json()['error'])
+        cache.clear()
+
+    def test_pm_record_delete_needs_no_password(self):
+        a = FieldAsset.objects.create(hostname='x')
+        rec = PMRecord.objects.create(asset=a, pm_date='2026-11-01')
+        self.assertEqual(self.delete(f'/api/field-assets/pm/delete/{rec.id}/', admin=None).status_code, 200)
 
 
 class CsvImportTest(BaseTest):

@@ -41,6 +41,8 @@ def api(*methods, auth=True):
                 return error('대상을 찾을 수 없습니다. 다른 사용자가 먼저 삭제했을 수 있습니다. 새로고침해 주세요.', 404)
             except ValidationError as e:
                 return error(str(e), 400)
+            except AdminConfirmError as e:
+                return error(str(e), 403, admin_required=True)
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
                 return error(f'요청 형식이 올바르지 않습니다: {e}', 400)
         return wrapped
@@ -49,6 +51,39 @@ def api(*methods, auth=True):
 
 def body(request):
     return json.loads(request.body or b'{}')
+
+
+class AdminConfirmError(Exception):
+    pass
+
+
+ADMIN_FAIL_LIMIT = 5        # 연속 실패 허용 횟수
+ADMIN_LOCK_SECONDS = 300    # 초과 시 잠금 시간
+
+
+def require_admin_confirm(request):
+    """삭제 전에 관리자(staff) 아이디/비밀번호를 다시 확인한다. 실패하면 AdminConfirmError.
+
+    로그인한 사람이 관리자가 아니어도, 관리자가 옆에서 자기 계정으로 입력하면 삭제할 수 있다.
+    비밀번호를 연속으로 틀리면 잠시 막는다.
+    """
+    from django.core.cache import cache
+    data = body(request)
+    username = (data.get('admin_username') or '').strip()
+    password = data.get('admin_password') or ''
+    if not username or not password:
+        raise AdminConfirmError('삭제하려면 관리자 아이디와 비밀번호를 입력해 주세요.')
+    key = f'admin-confirm-fail:{request.user.id}'
+    if cache.get(key, 0) >= ADMIN_FAIL_LIMIT:
+        raise AdminConfirmError('비밀번호를 여러 번 틀려 5분 동안 삭제할 수 없습니다.')
+    admin = authenticate(request, username=username, password=password)
+    if admin is None:
+        cache.set(key, cache.get(key, 0) + 1, ADMIN_LOCK_SECONDS)
+        raise AdminConfirmError('관리자 아이디 또는 비밀번호가 틀렸습니다.')
+    if not (admin.is_staff or admin.is_superuser):
+        raise AdminConfirmError(f'{admin.username} 계정은 관리자 권한이 없습니다.')
+    cache.delete(key)
+    return admin
 
 
 def server_dict(server):
@@ -73,7 +108,8 @@ def api_login(request):
         return error('아이디 또는 비밀번호가 틀렸습니다.', 401)
     login(request, user)
     # 로그인하면 CSRF 토큰이 새로 바뀌므로 새 토큰을 함께 돌려준다
-    return JsonResponse({'success': True, 'username': user.username, 'csrf_token': get_token(request)})
+    return JsonResponse({'success': True, 'username': user.username, 'is_admin': user.is_staff or user.is_superuser,
+                         'csrf_token': get_token(request)})
 
 
 @api('POST', auth=False)
@@ -85,7 +121,8 @@ def api_logout(request):
 @api('GET', auth=False)
 def api_me(request):
     if request.user.is_authenticated:
-        return JsonResponse({'authenticated': True, 'username': request.user.username})
+        u = request.user
+        return JsonResponse({'authenticated': True, 'username': u.username, 'is_admin': u.is_staff or u.is_superuser})
     return JsonResponse({'authenticated': False}, status=401)
 
 
@@ -140,11 +177,13 @@ def update_campus(request, campus_id):
 @api('DELETE')
 def delete_campus(request, campus_id):
     campus = Campus.objects.get(id=campus_id)
-    count = ServerAsset.objects.filter(rack__building__campus=campus).count()
-    if count:
-        return error(f'이 캠퍼스의 랙에 장비 {count}대가 남아 있어 삭제할 수 없습니다. 장비를 먼저 옮기거나 삭제해 주세요.', 409, server_count=count)
-    campus.delete()
-    return JsonResponse({'message': 'Deleted'})
+    admin = require_admin_confirm(request)
+    with transaction.atomic():
+        servers = ServerAsset.objects.filter(rack__building__campus=campus)
+        count = servers.count()
+        servers.delete()  # 랙 FK가 SET_NULL이라 장비는 따로 지워야 함
+        campus.delete()
+    return JsonResponse({'message': 'Deleted', 'deleted_servers': count, 'approved_by': admin.username})
 
 
 @api('POST')
@@ -166,11 +205,13 @@ def update_building(request, building_id):
 @api('DELETE')
 def delete_building(request, building_id):
     building = Building.objects.get(id=building_id)
-    count = ServerAsset.objects.filter(rack__building=building).count()
-    if count:
-        return error(f'이 건물의 랙에 장비 {count}대가 남아 있어 삭제할 수 없습니다. 장비를 먼저 옮기거나 삭제해 주세요.', 409, server_count=count)
-    building.delete()
-    return JsonResponse({'message': 'Deleted'})
+    admin = require_admin_confirm(request)
+    with transaction.atomic():
+        servers = ServerAsset.objects.filter(rack__building=building)
+        count = servers.count()
+        servers.delete()
+        building.delete()
+    return JsonResponse({'message': 'Deleted', 'deleted_servers': count, 'approved_by': admin.username})
 
 
 def _rack_height(value, rack=None):
@@ -213,11 +254,12 @@ def update_rack(request, rack_id):
 @api('DELETE')
 def delete_rack(request, rack_id):
     rack = Rack.objects.get(id=rack_id)
-    count = rack.servers.count()
-    if count:
-        return error(f'이 랙에 장비 {count}대가 남아 있어 삭제할 수 없습니다. 장비를 먼저 옮기거나 삭제해 주세요.', 409, server_count=count)
-    rack.delete()
-    return JsonResponse({'message': 'Deleted'})
+    admin = require_admin_confirm(request)
+    with transaction.atomic():
+        count = rack.servers.count()
+        rack.servers.all().delete()
+        rack.delete()
+    return JsonResponse({'message': 'Deleted', 'deleted_servers': count, 'approved_by': admin.username})
 
 
 # ---------------------------------------------------------------------------
@@ -268,8 +310,10 @@ def update_server(request, server_id):
 
 @api('DELETE')
 def delete_server(request, server_id):
-    ServerAsset.objects.get(id=server_id).delete()
-    return JsonResponse({'message': 'Deleted'})
+    server = ServerAsset.objects.get(id=server_id)
+    admin = require_admin_confirm(request)
+    server.delete()
+    return JsonResponse({'message': 'Deleted', 'approved_by': admin.username})
 
 
 # ---------------------------------------------------------------------------
@@ -357,8 +401,10 @@ def update_field_asset(request, asset_id):
 
 @api('DELETE')
 def delete_field_asset(request, asset_id):
-    FieldAsset.objects.get(id=asset_id).delete()
-    return JsonResponse({'message': 'Deleted'})
+    asset = FieldAsset.objects.get(id=asset_id)
+    admin = require_admin_confirm(request)
+    asset.delete()  # PM 점검 기록도 함께 삭제됨
+    return JsonResponse({'message': 'Deleted', 'approved_by': admin.username})
 
 
 def pm_record_dict(r):

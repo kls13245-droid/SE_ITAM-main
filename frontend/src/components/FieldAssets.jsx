@@ -34,7 +34,7 @@ const COLUMNS = [
 const uniq = (items, key) => [...new Set(items.map(i => i[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
 const fmtDateTime = (v) => (v ? new Date(v).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }) : '-');
 
-export default function FieldAssets({ showToast, focusId, onFocusHandled }) {
+export default function FieldAssets({ showToast, focusId, onFocusHandled, askDelete }) {
   const [data, setData] = useState({ items: [], last_imported_at: null });
   const [loading, setLoading] = useState(true);
   const [quick, setQuick] = useState('all');
@@ -77,15 +77,16 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled }) {
       })
       .catch(err => showToast(err.message, 'error'));
   };
-  const deleteAsset = (asset) => {
-    if (!window.confirm(`[${asset.hostname}] 장비와 PM 기록을 모두 삭제할까요?`)) return;
-    apiJson(`/api/field-assets/delete/${asset.id}/`, { method: 'DELETE' })
-      .then(() => {
-        setData(prev => ({ ...prev, items: prev.items.filter(a => a.id !== asset.id) }));
-        setSelectedId(null); showToast('장비를 삭제했습니다.');
-      })
-      .catch(err => showToast(err.message, 'error'));
-  };
+  const deleteAsset = (asset) => askDelete({
+    title: '현장 장비 삭제', target: `${asset.hostname} (${asset.site_group || '현장 미지정'})`,
+    url: `/api/field-assets/delete/${asset.id}/`,
+    warnings: ['이 장비의 PM 점검 기록이 모두 함께 삭제됩니다.', '랙에 자동 배치된 장비가 있다면 그쪽은 따로 남습니다.'],
+    onDone: () => {
+      setData(prev => ({ ...prev, items: prev.items.filter(a => a.id !== asset.id) }));
+      setSelectedId(null); showToast('장비를 삭제했습니다.');
+    },
+  });
+
   const options = useMemo(() => ({
     complex: uniq(items, 'complex'), product: uniq(items, 'product'),
     site_group: uniq(items, 'site_group'), status: uniq(items, 'status'),

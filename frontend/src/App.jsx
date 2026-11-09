@@ -11,9 +11,10 @@ import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import ServerForm from './components/ServerForm';
-import { apiFetch, apiJson, loadCsrfToken, setCsrfToken } from './api/client';
+import { apiFetch, apiJson, jsonBody, loadCsrfToken, setCsrfToken } from './api/client';
 import ImportCsvModal from './components/ImportCsvModal';
 import FieldAssets from './components/FieldAssets';
+import DeleteConfirmModal from './components/DeleteConfirmModal';
 import { matchesSearch, primaryIp, matchesFieldSearch, fieldIp } from './utils/server';
 import { STATUS_STYLE as FIELD_STATUS_STYLE } from './components/fieldAssetConstants';
 
@@ -53,6 +54,13 @@ export default function App() {
   const [view, setView] = useState('topology'); // 'topology' | 'field' (현장 장비)
   const [fieldAssets, setFieldAssets] = useState([]); // 전체 검색용 현장 장비 목록
   const [fieldFocusId, setFieldFocusId] = useState(null); // 검색에서 고른 현장 장비
+  const [currentUser, setCurrentUser] = useState({ username: '', isAdmin: false });
+  const [deleteRequest, setDeleteRequest] = useState(null); // 관리자 확인 삭제 창
+  // 삭제는 모두 이 창을 거친다: 경고 문구 + 관리자 아이디/비밀번호
+  const askDelete = ({ title, target, warnings = [], url, onDone }) => setDeleteRequest({
+    title, target, warnings,
+    onConfirm: (creds) => apiJson(url, jsonBody('DELETE', creds)).then(onDone),
+  });
   const [serverHistory, setServerHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
@@ -112,6 +120,7 @@ export default function App() {
           setIsAuthenticated(true);
           localStorage.setItem('itam_auth', 'true');
           localStorage.setItem('itam_user', data.username);
+          setCurrentUser({ username: data.username, isAdmin: !!data.is_admin });
         } else {
           setIsAuthenticated(false);
           localStorage.removeItem('itam_auth');
@@ -135,6 +144,7 @@ export default function App() {
         setCsrfToken(data.csrf_token);
         localStorage.setItem('itam_auth', 'true');
         localStorage.setItem('itam_user', data.username);
+        setCurrentUser({ username: data.username, isAdmin: !!data.is_admin });
         setIsAuthenticated(true);
         showToast(`${data.username}님, 환영합니다!`, "success");
       } else {
@@ -391,11 +401,16 @@ export default function App() {
       .then(() => { setSiteData(siteData.map(c => c.id === campus.id ? { ...c, name } : c)); showToast('캠퍼스 이름이 수정되었습니다.'); })
       .catch(err => showToast(err.message, 'error'));
   };
+  // 캠퍼스/건물/랙 안에 들어 있는 랙·장비 수 (삭제 경고용)
+  const countIn = (racks) => ({ racks: racks.length, servers: racks.reduce((n, r) => n + (r.servers?.length || 0), 0) });
   const handleDeleteCampus = (campus) => {
-    if (!window.confirm(`${campus.name} 캠퍼스와 하위 데이터를 삭제할까요?`)) return;
-    apiJson(`/api/campus/delete/${campus.id}/`, { method: 'DELETE' })
-      .then(() => { setSiteData(siteData.filter(c => c.id !== campus.id)); goHome(); showToast('캠퍼스가 삭제되었습니다.'); })
-      .catch(err => showToast(err.message, 'error'));
+    const buildings = campus.buildings || [];
+    const { racks, servers } = countIn(buildings.flatMap(b => b.racks || []));
+    askDelete({
+      title: '캠퍼스 삭제', target: campus.name, url: `/api/campus/delete/${campus.id}/`,
+      warnings: [`건물 ${buildings.length}개, 랙 ${racks}개, 장비 ${servers}대가 함께 삭제됩니다.`],
+      onDone: (r) => { goHome(); fetchSiteData(true); showToast(`캠퍼스를 삭제했습니다. (장비 ${r.deleted_servers}대 포함, 승인: ${r.approved_by})`); },
+    });
   };
   const handleRenameBuilding = (building) => {
     const name = window.prompt('건물 이름', building.name);
@@ -409,14 +424,15 @@ export default function App() {
       .catch(err => showToast(err.message, 'error'));
   };
   const handleDeleteBuilding = (building) => {
-    if (!window.confirm(`${building.name} 건물과 하위 랙을 삭제할까요?`)) return;
-    apiJson(`/api/building/delete/${building.id}/`, { method: 'DELETE' })
-      .then(() => {
-        setSiteData(siteData.map(c => ({ ...c, buildings: c.buildings?.filter(b => b.id !== building.id) })));
+    const { racks, servers } = countIn(building.racks || []);
+    askDelete({
+      title: '건물 삭제', target: building.name, url: `/api/building/delete/${building.id}/`,
+      warnings: [`랙 ${racks}개, 장비 ${servers}대가 함께 삭제됩니다.`],
+      onDone: (r) => {
         if (selectedBuilding?.id === building.id) goHome();
-        showToast('건물이 삭제되었습니다.');
-      })
-      .catch(err => showToast(err.message, 'error'));
+        fetchSiteData(true); showToast(`건물을 삭제했습니다. (장비 ${r.deleted_servers}대 포함, 승인: ${r.approved_by})`);
+      },
+    });
   };
   const handleRenameRack = (rack) => {
     const name = window.prompt('랙 이름', rack.name);
@@ -431,14 +447,12 @@ export default function App() {
       .catch(err => showToast(err.message, 'error'));
   };
   const handleDeleteRack = (rack) => {
-    if (!window.confirm(`${rack.name} 랙과 장비를 삭제할까요?`)) return;
-    apiJson(`/api/rack/delete/${rack.id}/`, { method: 'DELETE' })
-      .then(() => {
-        setSelectedBuilding({ ...selectedBuilding, racks: selectedBuilding.racks.filter(r => r.id !== rack.id) });
-        if (selectedRack?.id === rack.id) setSelectedRack(null);
-        showToast('랙이 삭제되었습니다.');
-      })
-      .catch(err => showToast(err.message, 'error'));
+    const n = rack.servers?.length || 0;
+    askDelete({
+      title: '랙 삭제', target: rack.name, url: `/api/rack/delete/${rack.id}/`,
+      warnings: [n ? `이 랙에 실장된 장비 ${n}대가 함께 삭제됩니다.` : '비어 있는 랙입니다.'],
+      onDone: (r) => { fetchSiteData(true); showToast(`랙을 삭제했습니다.${r.deleted_servers ? ` (장비 ${r.deleted_servers}대 포함)` : ''}`); },
+    });
   };
   const handleAddRackClick = () => { setNewRackForm({ name: '', location: '', total_u_space: 42 }); setIsAddingRack(true); };
   const handleNewRackChange = (field, value) => setNewRackForm(prev => ({ ...prev, [field]: value }));
@@ -555,23 +569,18 @@ export default function App() {
   };
 
   const handleDelete = () => {
-    if(!window.confirm(`[${selectedServer.hostname}] 장비를 영구 삭제하시겠습니까?`)) return;
-    apiJson(`/api/server/delete/${selectedServer.id}/`, { method: 'DELETE' })
-    .then(() => {
-      const updatedSiteData = siteData.map(c => ({ 
-        ...c, buildings: c.buildings?.map(b => ({ 
-          ...b, racks: b.racks?.map(r => {
-            if (r.id === selectedRack.id) {
-              const newSrv = r.servers.filter(s => s.id !== selectedServer.id);
-              return { ...r, servers: newSrv };
-            } return r;
-        })}))
-      }));
-      setSiteData(updatedSiteData);
-      setSelectedRack(prev => ({ ...prev, servers: prev.servers.filter(s => s.id !== selectedServer.id) }));
-      setSelectedServer(null); setIsEditing(false); showToast("장비가 폐기되었습니다.", "success");
-    }).catch(err => showToast(err.message, 'error'));
+    const srv = selectedServer;
+    askDelete({
+      title: '장비 삭제', target: `${srv.hostname} (U${srv.start_u}${srv.size_u > 1 ? `~U${srv.start_u + srv.size_u - 1}` : ''})`,
+      url: `/api/server/delete/${srv.id}/`,
+      warnings: ['장비 정보와 제원이 삭제됩니다. 변경 이력은 관리자 페이지에 남습니다.'],
+      onDone: () => {
+        setSelectedServer(null); setIsEditing(false); fetchSiteData(true);
+        showToast('장비를 삭제했습니다.', 'success');
+      },
+    });
   };
+
 
   const handleDragStart = (e, server) => { e.dataTransfer.setData("serverId", server.id); };
   const handleDragOver = (e) => { e.preventDefault(); };
@@ -949,7 +958,7 @@ export default function App() {
         <main className="flex-1 overflow-y-auto bg-slate-50 p-6 flex relative z-0">
           
           {view === 'field' ? (
-            <FieldAssets showToast={showToast} focusId={fieldFocusId} onFocusHandled={() => setFieldFocusId(null)} />
+            <FieldAssets showToast={showToast} focusId={fieldFocusId} onFocusHandled={() => setFieldFocusId(null)} askDelete={askDelete} />
           ) : !selectedBuilding ? (
             <Dashboard stats={dashboardStats} onOpenStatus={openStatusDrillDown} />
           ) : !selectedRack ? (
@@ -1282,6 +1291,14 @@ export default function App() {
           )}
 
           {/* 상태 드릴다운 팝업 모달 */}
+          {deleteRequest && (
+            <DeleteConfirmModal
+              request={deleteRequest}
+              defaultUsername={currentUser.isAdmin ? currentUser.username : ''}
+              onClose={() => setDeleteRequest(null)}
+            />
+          )}
+
           {showImport && selectedRack && (
             <ImportCsvModal
               rack={selectedRack}
