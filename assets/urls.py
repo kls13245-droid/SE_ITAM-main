@@ -29,6 +29,10 @@ urlpatterns = [
     path('api/server/update/<int:server_id>/', views.update_server, name='update_server'),
     path('api/server/delete/<int:server_id>/', views.delete_server, name='delete_server'),
     
+    # 현장 장비 (PM)
+    path('api/field-assets/', views.field_assets, name='field_assets'),
+    path('api/field-assets/import/', views.import_field_assets_view, name='import_field_assets'),
+
     # 자산 변경 이력 조회 API
     path('api/server/history/<int:server_id>/', views.get_server_history, name='get_server_history'),
 ]

@@ -1,0 +1,348 @@
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import {
+  MapPin, Search, Upload, Download, X, ExternalLink, AlertTriangle, CheckCircle,
+  Wrench, Wifi, ClipboardList, Server, ChevronUp, ChevronDown,
+} from 'lucide-react';
+import { apiJson } from '../api/client';
+
+// monday 'SE파트 - PM 현황' 보드 (항목 링크용)
+const MONDAY_ITEM_URL = 'https://mirero-company.monday.com/boards/9255835900/pulses/';
+
+// monday 보드의 상태 색과 비슷하게 맞춤
+const STATUS_STYLE = {
+  '가동': 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  '확인 필요': 'bg-slate-200 text-slate-700 border-slate-300',
+  '운영 전환': 'bg-slate-600 text-white border-slate-600',
+  'Parts 교체 필요': 'bg-pink-100 text-pink-700 border-pink-200',
+  '유휴 서버 전환': 'bg-sky-100 text-sky-700 border-sky-200',
+  '사용불가': 'bg-red-100 text-red-700 border-red-200',
+  '폐기': 'bg-amber-100 text-amber-700 border-amber-200',
+  'Setup 전': 'bg-blue-100 text-blue-700 border-blue-200',
+};
+const IPMI_STYLE = { '접속 가능': 'text-emerald-600', '접속 불가': 'text-red-600', '확인 필요': 'text-slate-500', 'IP 없음': 'text-amber-600' };
+const ATTENTION_STATUSES = ['확인 필요', 'Parts 교체 필요', '사용불가'];
+const PARTS = [['cpu', 'CPU'], ['memory', 'MEM'], ['network', 'NET'], ['disk', 'DISK'], ['fans', 'FAN'], ['cache_battery', 'BAT']];
+
+const faultParts = (a) => PARTS.filter(([k]) => a.health?.[k] === 'Fault').map(([, label]) => label);
+
+const QUICK_FILTERS = {
+  all: { label: '전체', icon: Server, test: () => true, tone: 'text-slate-800' },
+  running: { label: '가동', icon: CheckCircle, test: a => a.status === '가동', tone: 'text-emerald-600' },
+  attention: { label: '점검 필요', icon: AlertTriangle, test: a => ATTENTION_STATUSES.includes(a.status), tone: 'text-red-600', hint: '확인 필요 · Parts 교체 · 사용불가' },
+  fault: { label: '부품 Fault', icon: Wrench, test: a => faultParts(a).length > 0, tone: 'text-pink-600' },
+  ipmi: { label: 'IPMI 접속 불가', icon: Wifi, test: a => a.ipmi_status === '접속 불가', tone: 'text-amber-600' },
+  pm: { label: 'PM 미완료', icon: ClipboardList, test: a => a.pm_status !== '완료', tone: 'text-blue-600', hint: 'PM 상태가 완료가 아닌 장비' },
+};
+
+const COLUMNS = [
+  ['hostname', 'Hostname'], ['site_group', '현장'], ['complex', '단지'], ['product', '제품'], ['status', '상태'],
+  ['model_name', 'Model'], ['serial_number', 'S/N'], ['ipmi_ip', 'IPMI IP'], ['public_ip', 'Public IP'],
+  ['private_ip', 'Private IP'], ['ipmi_status', 'IPMI'], ['pm_date', 'PM 날짜'], ['health', '부품'], ['note', '비고'],
+];
+
+const uniq = (items, key) => [...new Set(items.map(i => i[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+const fmtDateTime = (v) => (v ? new Date(v).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }) : '-');
+
+export default function FieldAssets({ showToast }) {
+  const [data, setData] = useState({ items: [], last_imported_at: null });
+  const [loading, setLoading] = useState(true);
+  const [quick, setQuick] = useState('all');
+  const [filters, setFilters] = useState({ q: '', complex: '', product: '', site_group: '', status: '' });
+  const [sort, setSort] = useState({ key: 'site_group', dir: 'asc' });
+  const [selected, setSelected] = useState(null);
+  const [importState, setImportState] = useState(null); // { file, preview, busy }
+
+  const load = () => apiJson('/api/field-assets/')
+    .then(setData)
+    .catch(err => showToast(err.message, 'error'))
+    .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, []);
+
+  const items = data.items;
+  const options = useMemo(() => ({
+    complex: uniq(items, 'complex'), product: uniq(items, 'product'),
+    site_group: uniq(items, 'site_group'), status: uniq(items, 'status'),
+  }), [items]);
+
+  const counts = useMemo(() => Object.fromEntries(
+    Object.entries(QUICK_FILTERS).map(([k, f]) => [k, items.filter(f.test).length])), [items]);
+
+  const rows = useMemo(() => {
+    const q = filters.q.trim().toLowerCase();
+    const list = items.filter(a =>
+      QUICK_FILTERS[quick].test(a)
+      && ['complex', 'product', 'site_group', 'status'].every(k => !filters[k] || a[k] === filters[k])
+      && (!q || [a.hostname, a.serial_number, a.model_name, a.ipmi_ip, a.public_ip, a.private_ip, a.note, a.site_group]
+        .some(v => (v || '').toLowerCase().includes(q))));
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return list.sort((a, b) => {
+      const va = sort.key === 'health' ? faultParts(a).length : (a[sort.key] || '');
+      const vb = sort.key === 'health' ? faultParts(b).length : (b[sort.key] || '');
+      if (typeof va === 'number') return (va - vb) * dir;
+      if (!va && vb) return 1;
+      if (va && !vb) return -1;
+      return String(va).localeCompare(String(vb), 'ko', { numeric: true }) * dir
+        || a.hostname.localeCompare(b.hostname, 'ko', { numeric: true });
+    });
+  }, [items, quick, filters, sort]);
+
+  const setFilter = (k, v) => setFilters(prev => ({ ...prev, [k]: v }));
+  const resetFilters = () => { setFilters({ q: '', complex: '', product: '', site_group: '', status: '' }); setQuick('all'); };
+  const toggleSort = (key) => setSort(prev => ({ key, dir: prev.key === key && prev.dir === 'asc' ? 'desc' : 'asc' }));
+
+  // 화면에 보이는 목록 그대로 CSV로 내보내기
+  const exportCsv = () => {
+    const header = COLUMNS.map(([, label]) => label);
+    const esc = (v) => `"${String(v ?? '').replaceAll('"', '""')}"`;
+    const lines = rows.map(a => COLUMNS.map(([k]) => esc(k === 'health' ? faultParts(a).join(' ') : a[k])).join(','));
+    const blob = new Blob(['﻿' + [header.map(esc).join(','), ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `현장장비_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const sendImport = (file, mode) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('mode', mode);
+    return apiJson('/api/field-assets/import/', { method: 'POST', body: form });
+  };
+  const pickImportFile = (file) => {
+    if (!file) return;
+    setImportState({ file, preview: null, busy: true });
+    sendImport(file, 'preview')
+      .then(preview => setImportState({ file, preview, busy: false }))
+      .catch(err => { showToast(err.message, 'error'); setImportState(null); });
+  };
+  const commitImport = () => {
+    setImportState(s => ({ ...s, busy: true }));
+    sendImport(importState.file, 'commit')
+      .then(r => { showToast(`신규 ${r.created}대, 갱신 ${r.updated}대를 반영했습니다.`); setImportState(null); load(); })
+      .catch(err => { showToast(err.message, 'error'); setImportState(s => ({ ...s, busy: false })); });
+  };
+
+  const filtered = quick !== 'all' || Object.values(filters).some(Boolean);
+
+  return (
+    <div className="flex-1 flex flex-col gap-4 min-w-0 w-full max-w-[1800px] mx-auto">
+      {/* 제목 */}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center"><MapPin className="text-orange-500 mr-2" size={22} /> 현장 장비 (PM 현황)</h2>
+          <p className="text-slate-500 text-sm mt-1">
+            고객사 현장에 설치된 장비입니다. 랙 실장도와는 별도로 관리합니다. · monday 'SE파트 - PM 현황' 기준 · 마지막 가져온 시각 <b>{fmtDateTime(data.last_imported_at)}</b>
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="px-3 py-2 flex items-center bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold cursor-pointer">
+            <Upload size={14} className="mr-1.5" /> monday CSV 가져오기
+            <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { pickImportFile(e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
+          <button onClick={exportCsv} disabled={!rows.length} className="px-3 py-2 flex items-center bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold disabled:opacity-40">
+            <Download size={14} className="mr-1.5" /> 보이는 목록 내보내기
+          </button>
+        </div>
+      </div>
+
+      {/* 요약 카드 (누르면 해당 장비만 보기) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        {Object.entries(QUICK_FILTERS).map(([key, f]) => {
+          const Icon = f.icon;
+          return (
+            <button key={key} onClick={() => setQuick(key)} title={f.hint || ''}
+              className={`text-left bg-white p-4 rounded-xl border shadow-sm transition-all ${quick === key ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}`}>
+              <div className="text-slate-500 text-xs font-bold flex items-center"><Icon size={14} className={`mr-1.5 ${f.tone}`} />{f.label}</div>
+              <div className={`text-3xl font-black mt-1 ${f.tone}`}>{counts[key] ?? 0}<span className="text-sm font-medium text-slate-400 ml-1">대</span></div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 필터 */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[240px]">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={filters.q} onChange={(e) => setFilter('q', e.target.value)} placeholder="Hostname, IP, S/N, 모델, 비고 검색"
+            className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        {[['complex', '단지'], ['site_group', '현장'], ['product', '제품'], ['status', '상태']].map(([k, label]) => (
+          <select key={k} value={filters[k]} onChange={(e) => setFilter(k, e.target.value)}
+            className={`border rounded-lg py-2 px-2 text-sm outline-none max-w-[200px] ${filters[k] ? 'border-blue-400 bg-blue-50 text-blue-800 font-bold' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+            <option value="">{label} 전체</option>
+            {options[k].map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        ))}
+        {filtered && <button onClick={resetFilters} className="text-xs font-bold text-slate-500 hover:text-slate-800 px-2">필터 초기화</button>}
+        <span className="ml-auto text-xs text-slate-500"><b className="text-slate-800">{rows.length}</b> / {items.length}대</span>
+      </div>
+
+      {/* 목록 */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex-1 min-h-[300px] overflow-auto">
+        {loading ? (
+          <p className="text-center text-slate-500 py-16">불러오는 중...</p>
+        ) : items.length === 0 ? (
+          <div className="text-center text-slate-500 py-16 px-6">
+            <MapPin size={40} className="mx-auto mb-3 text-slate-300" />
+            <p className="font-bold text-slate-600">아직 가져온 현장 장비가 없습니다.</p>
+            <p className="text-sm mt-1">오른쪽 위 <b>monday CSV 가져오기</b>로 PM 현황 파일을 올려주세요.</p>
+          </div>
+        ) : (
+          <table className="w-full text-xs border-collapse">
+            <thead className="sticky top-0 z-10">
+              <tr className="bg-[#ddebf7] text-slate-800">
+                {COLUMNS.map(([k, label]) => (
+                  <th key={k} onClick={() => toggleSort(k)} className="border-b border-r border-slate-300 px-2 py-2 text-left font-bold whitespace-nowrap cursor-pointer select-none hover:bg-[#cfe2f3]">
+                    <span className="inline-flex items-center">{label}
+                      {sort.key === k && (sort.dir === 'asc' ? <ChevronUp size={12} className="ml-0.5" /> : <ChevronDown size={12} className="ml-0.5" />)}
+                    </span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(a => {
+                const faults = faultParts(a);
+                return (
+                  <tr key={a.id} onClick={() => setSelected(a)}
+                    className={`cursor-pointer border-b border-slate-100 hover:bg-blue-50 ${selected?.id === a.id ? 'bg-blue-50' : ''}`}>
+                    <td className="px-2 py-1.5 font-mono font-bold text-blue-700 whitespace-nowrap">{a.hostname}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{a.site_group}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{a.complex}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{a.product}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      {a.status && <span className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${STATUS_STYLE[a.status] || 'bg-slate-100 text-slate-600 border-slate-200'}`}>{a.status}</span>}
+                    </td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{a.model_name}</td>
+                    <td className="px-2 py-1.5 font-mono whitespace-nowrap">{a.serial_number}</td>
+                    <td className="px-2 py-1.5 font-mono whitespace-nowrap">{a.ipmi_ip}</td>
+                    <td className="px-2 py-1.5 font-mono whitespace-nowrap">{a.public_ip}</td>
+                    <td className="px-2 py-1.5 font-mono whitespace-nowrap">{a.private_ip}</td>
+                    <td className={`px-2 py-1.5 whitespace-nowrap font-bold ${IPMI_STYLE[a.ipmi_status] || ''}`}>{a.ipmi_status}</td>
+                    <td className="px-2 py-1.5 font-mono whitespace-nowrap">{a.pm_date}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      {faults.length
+                        ? <span className="text-red-600 font-bold">⚠ {faults.join(', ')}</span>
+                        : <span className="text-slate-300">정상</span>}
+                    </td>
+                    <td className="px-2 py-1.5 text-slate-600 max-w-[260px] truncate" title={a.note}>{a.note}</td>
+                  </tr>
+                );
+              })}
+              {rows.length === 0 && <tr><td colSpan={COLUMNS.length} className="p-8 text-center text-slate-400">조건에 맞는 장비가 없습니다.</td></tr>}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* 화면 전체(사이드바 포함) 위에 띄우기 위해 body에 렌더링 */}
+      {selected && createPortal(<DetailPanel asset={selected} onClose={() => setSelected(null)} />, document.body)}
+      {importState && createPortal(<ImportConfirm state={importState} onCancel={() => setImportState(null)} onCommit={commitImport} />, document.body)}
+    </div>
+  );
+}
+
+function DetailPanel({ asset: a, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const row = (label, value, mono = false) => (
+    <div className="flex justify-between gap-4 py-1.5 border-b border-slate-100 text-sm">
+      <dt className="text-slate-500 shrink-0">{label}</dt>
+      <dd className={`text-slate-800 font-medium text-right break-all ${mono ? 'font-mono' : ''}`}>{value || '-'}</dd>
+    </div>
+  );
+  return (
+    <div className="fixed inset-0 z-[60] flex justify-end bg-slate-900/30" onClick={onClose}>
+      <div className="w-full max-w-md h-full bg-white shadow-2xl overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-200 bg-slate-50 flex items-start justify-between sticky top-0">
+          <div className="min-w-0">
+            <p className="text-xs text-slate-500">{a.complex} · {a.site_group}</p>
+            <h3 className="text-xl font-bold font-mono text-slate-800 break-all">{a.hostname}</h3>
+            {a.status && <span className={`inline-block mt-1 px-2 py-0.5 rounded border text-xs font-bold ${STATUS_STYLE[a.status] || 'bg-slate-100 border-slate-200'}`}>{a.status}</span>}
+          </div>
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-5">
+          <section>
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">기본 정보</h4>
+            <dl>{row('제품', a.product)}{row('Model', a.model_name)}{row('S/N', a.serial_number, true)}</dl>
+          </section>
+          <section>
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">네트워크</h4>
+            <dl>{row('IPMI IP', a.ipmi_ip, true)}{row('IPMI 상태', a.ipmi_status)}{row('Public IP', a.public_ip, true)}{row('Private IP', a.private_ip, true)}</dl>
+          </section>
+          <section>
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">PM 점검</h4>
+            <dl>{row('PM 날짜', a.pm_date)}{row('PM 상태', a.pm_status)}{row('워런티 종료', a.warranty_end)}</dl>
+            <div className="grid grid-cols-3 gap-2 mt-3">
+              {PARTS.map(([k, label]) => {
+                const v = a.health?.[k] || '';
+                const tone = v === 'Fault' ? 'bg-red-50 border-red-200 text-red-700' : v === '정상' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-500';
+                return (
+                  <div key={k} className={`border rounded-lg p-2 text-center ${tone}`}>
+                    <div className="text-[10px] font-bold opacity-70">{label}</div>
+                    <div className="text-sm font-bold">{v || '-'}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+          <section>
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">비고</h4>
+            <p className="text-sm text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-3 border border-slate-100">{a.note || '내용 없음'}</p>
+          </section>
+          {a.monday_item_id && (
+            <a href={`${MONDAY_ITEM_URL}${a.monday_item_id}`} target="_blank" rel="noreferrer"
+              className="flex items-center justify-center gap-1.5 w-full py-2.5 rounded-lg border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">
+              monday에서 열기 <ExternalLink size={14} />
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportConfirm({ state, onCancel, onCommit }) {
+  const p = state.preview;
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+        <div className="p-5 border-b border-slate-100">
+          <h3 className="text-lg font-bold text-slate-800 flex items-center"><Upload size={18} className="mr-2 text-amber-600" /> monday CSV 가져오기</h3>
+          <p className="text-sm text-slate-500 mt-0.5 font-mono">{state.file.name}</p>
+        </div>
+        <div className="p-5 text-sm">
+          {!p ? <p className="text-slate-500">확인 중...</p> : (
+            <>
+              <div className="grid grid-cols-3 gap-2 text-center mb-3">
+                <div className="bg-emerald-50 rounded-lg p-3"><div className="text-2xl font-black text-emerald-600">{p.created}</div><div className="text-xs text-slate-500">신규</div></div>
+                <div className="bg-blue-50 rounded-lg p-3"><div className="text-2xl font-black text-blue-600">{p.updated}</div><div className="text-xs text-slate-500">갱신</div></div>
+                <div className="bg-red-50 rounded-lg p-3"><div className="text-2xl font-black text-red-600">{p.errors.length}</div><div className="text-xs text-slate-500">오류(제외)</div></div>
+              </div>
+              <p className="text-slate-600">같은 monday ID의 장비는 새 값으로 갱신하고, 파일에 없는 기존 장비는 그대로 둡니다.</p>
+              {p.errors.length > 0 && (
+                <ul className="mt-3 max-h-40 overflow-y-auto text-xs text-red-600 bg-red-50 rounded-lg p-2 space-y-0.5">
+                  {p.errors.map(e => <li key={e.line}>{e.line}행 {e.hostname}: {e.error}</li>)}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+        <div className="p-4 border-t border-slate-100 flex justify-end gap-2">
+          <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-100">취소</button>
+          <button onClick={onCommit} disabled={state.busy || !p || (p.created + p.updated === 0)}
+            className="px-4 py-2 rounded-lg text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40">
+            {p ? `${p.created + p.updated}대 반영` : '반영'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
