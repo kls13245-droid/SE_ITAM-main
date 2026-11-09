@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 
-from .models import Building, Campus, FieldAsset, Rack, ServerAsset
+from .models import Building, Campus, FieldAsset, PMRecord, Rack, ServerAsset
 
 
 class BaseTest(TestCase):
@@ -241,3 +241,70 @@ class FieldAssetTest(BaseTest):
     def test_field_assets_do_not_appear_in_rack_data(self):
         self.upload_field(self.CSV)
         self.assertNotIn('ControlPC', self.c.get('/api/site-data/').content.decode())
+
+
+class FieldAssetEditTest(FieldAssetTest):
+    def test_add_and_edit_asset(self):
+        r = self.post('/api/field-assets/add/', {'hostname': 'NEW-01', 'site_group': 'P4 DM', 'status': '가동',
+                                                 'ipmi_ip': '10.0.0.5', 'health': {'disk': '정상'}})
+        self.assertEqual(r.status_code, 200, r.content)
+        a = FieldAsset.objects.get(hostname='NEW-01')
+        self.assertTrue(a.locally_modified)
+        self.assertIsNone(a.monday_item_id)
+        r = self.put(f'/api/field-assets/update/{a.id}/', {'status': 'Parts 교체 필요', 'note': '팬 교체 예정'})
+        a.refresh_from_db()
+        self.assertEqual((a.status, a.note, a.ipmi_ip), ('Parts 교체 필요', '팬 교체 예정', '10.0.0.5'))
+
+    def test_edit_validation(self):
+        self.upload_field(self.CSV)
+        a = FieldAsset.objects.get(monday_item_id='111')
+        self.assertEqual(self.put(f'/api/field-assets/update/{a.id}/', {'hostname': ''}).status_code, 400)
+        self.assertEqual(self.put(f'/api/field-assets/update/{a.id}/', {'status': '아무거나'}).status_code, 400)
+        self.assertEqual(self.put(f'/api/field-assets/update/{a.id}/', {'public_ip': '999.1.1.1'}).status_code, 400)
+        self.assertEqual(self.put(f'/api/field-assets/update/{a.id}/', {'pm_date': '내일'}).status_code, 400)
+        # monday에서 온 값을 그대로 다시 보내는 건 허용 (형식 검사는 바뀐 값만)
+        self.assertEqual(self.put(f'/api/field-assets/update/{a.id}/', {'public_ip': a.public_ip, 'note': 'x'}).status_code, 200)
+
+    def test_reimport_keeps_local_edits(self):
+        self.upload_field(self.CSV)
+        a = FieldAsset.objects.get(monday_item_id='111')
+        self.put(f'/api/field-assets/update/{a.id}/', {'status': '폐기'})
+        r = self.upload_field(self.CSV).json()
+        self.assertEqual((r['updated'], r['kept']), (1, 1))
+        a.refresh_from_db()
+        self.assertEqual(a.status, '폐기')
+
+    def test_pm_record_updates_asset_with_latest(self):
+        self.upload_field(self.CSV)
+        a = FieldAsset.objects.get(monday_item_id='111')
+        url = f'/api/field-assets/{a.id}/pm/'
+        r = self.post(url, {'pm_date': '2026-11-01', 'pm_status': '확인 필요',
+                            'health': {'disk': 'Fault', 'fans': '정상'}, 'note': '디스크 경고'})
+        self.assertEqual(r.status_code, 200, r.content)
+        rec = r.json()['records'][0]
+        self.assertEqual((rec['worker'], rec['created_by']), ('admin', 'admin'))
+        # 더 예전 날짜의 기록을 추가해도 최신 기록 기준 유지
+        self.post(url, {'pm_date': '2025-01-01', 'pm_status': '완료'})
+        a.refresh_from_db()
+        self.assertEqual((str(a.pm_date), a.pm_status, a.health['disk']), ('2026-11-01', '확인 필요', 'Fault'))
+        self.assertTrue(a.locally_modified)
+        # 최신 기록을 지우면 그다음 기록이 반영됨
+        latest_id = PMRecord.objects.get(pm_date='2026-11-01').id
+        self.delete(f'/api/field-assets/pm/delete/{latest_id}/')
+        a.refresh_from_db()
+        self.assertEqual((str(a.pm_date), a.pm_status), ('2025-01-01', '완료'))
+
+    def test_pm_record_validation(self):
+        self.upload_field(self.CSV)
+        a = FieldAsset.objects.get(monday_item_id='111')
+        url = f'/api/field-assets/{a.id}/pm/'
+        self.assertEqual(self.post(url, {'pm_status': '완료'}).status_code, 400)
+        self.assertEqual(self.post(url, {'pm_date': '2026-11-01', 'pm_status': '대충'}).status_code, 400)
+        self.assertEqual(self.post(url, {'pm_date': '2026-11-01', 'health': {'cpu': '고장'}}).status_code, 400)
+
+    def test_delete_asset_removes_records(self):
+        self.upload_field(self.CSV)
+        a = FieldAsset.objects.get(monday_item_id='111')
+        self.post(f'/api/field-assets/{a.id}/pm/', {'pm_date': '2026-11-01'})
+        self.assertEqual(self.delete(f'/api/field-assets/delete/{a.id}/').status_code, 200)
+        self.assertEqual(PMRecord.objects.count(), 0)

@@ -377,7 +377,7 @@ def import_field_assets(raw: bytes, dry_run=False):
     """monday에서 내보낸 PM 현황 CSV를 현장 장비로 반영한다.
 
     monday ID가 같은 장비는 갱신, 없으면 새로 만든다. (호스트명은 현장마다 겹칠 수 있어 기준으로 쓰지 않음)
-    파일에 없는 기존 장비는 지우지 않는다.
+    파일에 없는 기존 장비는 지우지 않는다. ITAM에서 직접 고친 장비(locally_modified)는 건너뛴다.
     """
     from django.db import transaction
     from django.utils import timezone
@@ -392,7 +392,7 @@ def import_field_assets(raw: bytes, dry_run=False):
         raise ValidationError("hostname(또는 Hostname) 열이 없습니다. monday에서 받은 PM 현황 파일인지 확인해 주세요.")
 
     now = timezone.now()
-    created = updated = 0
+    created = updated = kept = 0
     errors = []
     with transaction.atomic():
         for line_no, cols in enumerate(rows[1:], start=2):
@@ -413,15 +413,85 @@ def import_field_assets(raw: bytes, dry_run=False):
                 values["health"] = {p: item.get(p, "") for p in FieldAsset.HEALTH_PARTS}
                 values["imported_at"] = now
                 mid = item.get("monday_item_id") or None
-                if mid:
-                    _, was_created = FieldAsset.objects.update_or_create(monday_item_id=mid, defaults=values)
+                existing = FieldAsset.objects.filter(monday_item_id=mid).first() if mid else None
+                if existing and existing.locally_modified:
+                    kept += 1  # ITAM에서 고친 장비는 그대로 둔다
+                    continue
+                if existing:
+                    for k, v in values.items():
+                        setattr(existing, k, v)
+                    existing.save()
+                    updated += 1
                 else:
-                    FieldAsset.objects.create(**values)
-                    was_created = True
-                created += was_created
-                updated += not was_created
+                    FieldAsset.objects.create(monday_item_id=mid, **values)
+                    created += 1
             except ValidationError as e:
                 errors.append({"line": line_no, "hostname": item.get("hostname", ""), "error": str(e)})
         if dry_run:
             transaction.set_rollback(True)
-    return {"created": created, "updated": updated, "errors": errors, "total": len(rows) - 1}
+    return {"created": created, "updated": updated, "kept": kept, "errors": errors, "total": len(rows) - 1}
+
+
+# ---------------------------------------------------------------------------
+# 현장 장비 직접 등록/수정, PM 점검 기록
+# ---------------------------------------------------------------------------
+FIELD_STATUSES = ("가동", "Setup 전", "운영 전환", "확인 필요", "Parts 교체 필요", "유휴 서버 전환", "사용불가", "폐기")
+IPMI_STATUSES = ("접속 가능", "접속 불가", "확인 필요", "IP 없음")
+HEALTH_VALUES = ("정상", "Fault", "Disable", "")
+FIELD_TEXT_KEYS = ("hostname", "site_group", "complex", "product", "status", "model_name", "serial_number",
+                   "ipmi_ip", "public_ip", "private_ip", "ipmi_status", "pm_status", "note")
+
+
+def _choice(value, allowed, label, current=None):
+    v = (value or "").strip()
+    if v and v not in allowed and v != current:
+        raise ValidationError(f"{label} 값이 올바르지 않습니다: '{v}' ({' / '.join(a for a in allowed if a)})")
+    return v
+
+
+def clean_health(data, parts):
+    health = {}
+    for p in parts:
+        v = (data or {}).get(p, "") or ""
+        health[p] = _choice(v, HEALTH_VALUES, f"부품 상태({p})")
+    return health
+
+
+def clean_field_asset(data, asset=None):
+    """화면에서 장비를 추가/수정할 때의 검증. asset이 있으면 보낸 값만 바꾼다."""
+    from .models import FieldAsset
+    cur = (lambda k: getattr(asset, k)) if asset else (lambda k: "")
+    out = {}
+    for k in FIELD_TEXT_KEYS:
+        if k in data or not asset:
+            out[k] = (data.get(k) or "").strip()
+    if "hostname" in out and not out["hostname"]:
+        raise ValidationError("Hostname은 필수입니다.")
+    if "status" in out:
+        out["status"] = _choice(out["status"], FIELD_STATUSES, "상태", cur("status"))
+    if "ipmi_status" in out:
+        out["ipmi_status"] = _choice(out["ipmi_status"], IPMI_STATUSES, "IPMI 상태", cur("ipmi_status"))
+    if "pm_status" in out:
+        out["pm_status"] = _choice(out["pm_status"], ("완료", "확인 필요", "미사용"), "PM 상태", cur("pm_status"))
+    for k in ("ipmi_ip", "public_ip", "private_ip"):
+        # monday에서 온 값은 형식이 제각각이라, 바뀐 경우에만 IP 형식을 검사한다
+        if k in out and out[k] and out[k] != cur(k):
+            out[k] = normalize_ip_list(out[k])
+    for k, label in (("pm_date", "PM 날짜"), ("warranty_end", "워런티 종료")):
+        if k in data or not asset:
+            out[k] = _parse_date(data.get(k), label)
+    if "health" in data or not asset:
+        out["health"] = clean_health(data.get("health"), FieldAsset.HEALTH_PARTS)
+    out["locally_modified"] = True
+    return out
+
+
+def refresh_asset_pm(asset):
+    """가장 최근 PM 기록을 장비의 PM 날짜/상태/부품 상태로 반영한다."""
+    latest = asset.pm_records.order_by("-pm_date", "-id").first()
+    if latest:
+        asset.pm_date = latest.pm_date
+        asset.pm_status = latest.pm_status
+        asset.health = latest.health
+        asset.locally_modified = True
+        asset.save()

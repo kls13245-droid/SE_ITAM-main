@@ -9,10 +9,10 @@ from django.http import HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 
-from .models import Building, Campus, FieldAsset, Rack, ServerAsset
+from .models import Building, Campus, FieldAsset, PMRecord, Rack, ServerAsset
 from .services import (
-    ValidationError, import_field_assets, parse_csv, template_csv, to_int, validate_import,
-    validate_server_payload,
+    ValidationError, clean_field_asset, clean_health, import_field_assets, parse_csv, refresh_asset_pm,
+    template_csv, to_int, validate_import, validate_server_payload, _parse_date,
 )
 
 SERVER_FIELDS = ('id', 'hostname', 'start_u', 'size_u', 'status', 'model_name',
@@ -325,7 +325,8 @@ def import_servers(request):
 # ---------------------------------------------------------------------------
 FIELD_ASSET_FIELDS = ('id', 'monday_item_id', 'hostname', 'site_group', 'complex', 'product', 'status',
                       'model_name', 'serial_number', 'ipmi_ip', 'public_ip', 'private_ip', 'ipmi_status',
-                      'pm_date', 'pm_status', 'warranty_end', 'health', 'note', 'imported_at')
+                      'pm_date', 'pm_status', 'warranty_end', 'health', 'note', 'imported_at',
+                      'locally_modified')
 
 
 @api('GET')
@@ -333,6 +334,70 @@ def field_assets(request):
     items = list(FieldAsset.objects.values(*FIELD_ASSET_FIELDS))
     last = max((i['imported_at'] for i in items if i['imported_at']), default=None)
     return JsonResponse({'items': items, 'last_imported_at': last})
+
+
+def field_asset_dict(asset):
+    return {f: getattr(asset, f) for f in FIELD_ASSET_FIELDS}
+
+
+@api('POST')
+def add_field_asset(request):
+    asset = FieldAsset.objects.create(**clean_field_asset(body(request)))
+    return JsonResponse(field_asset_dict(asset))
+
+
+@api('PUT')
+def update_field_asset(request, asset_id):
+    asset = FieldAsset.objects.get(id=asset_id)
+    for k, v in clean_field_asset(body(request), asset).items():
+        setattr(asset, k, v)
+    asset.save()
+    return JsonResponse(field_asset_dict(asset))
+
+
+@api('DELETE')
+def delete_field_asset(request, asset_id):
+    FieldAsset.objects.get(id=asset_id).delete()
+    return JsonResponse({'message': 'Deleted'})
+
+
+def pm_record_dict(r):
+    return {'id': r.id, 'pm_date': r.pm_date, 'pm_status': r.pm_status, 'health': r.health,
+            'worker': r.worker, 'note': r.note, 'created_at': r.created_at,
+            'created_by': r.created_by.username if r.created_by else ''}
+
+
+@api('GET', 'POST')
+def field_asset_pm_records(request, asset_id):
+    asset = FieldAsset.objects.get(id=asset_id)
+    if request.method == 'POST':
+        data = body(request)
+        pm_date = _parse_date(data.get('pm_date'), '점검일')
+        if not pm_date:
+            raise ValidationError('점검일을 입력해 주세요.')
+        status = (data.get('pm_status') or '완료').strip()
+        if status not in PMRecord.PM_STATUSES:
+            raise ValidationError(f"점검 결과 값이 올바르지 않습니다: '{status}'")
+        PMRecord.objects.create(
+            asset=asset, pm_date=pm_date, pm_status=status,
+            health=clean_health(data.get('health'), FieldAsset.HEALTH_PARTS),
+            worker=(data.get('worker') or request.user.username).strip(),
+            note=(data.get('note') or '').strip(), created_by=request.user,
+        )
+        refresh_asset_pm(asset)
+    return JsonResponse({
+        'asset': field_asset_dict(asset),
+        'records': [pm_record_dict(r) for r in asset.pm_records.select_related('created_by')],
+    })
+
+
+@api('DELETE')
+def delete_pm_record(request, record_id):
+    record = PMRecord.objects.select_related('asset').get(id=record_id)
+    asset = record.asset
+    record.delete()
+    refresh_asset_pm(asset)  # 남은 기록 중 최신 것을 다시 반영
+    return JsonResponse({'asset': field_asset_dict(asset)})
 
 
 @api('POST')

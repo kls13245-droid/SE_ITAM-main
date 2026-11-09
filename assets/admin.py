@@ -2,7 +2,7 @@ from django.contrib import admin
 from import_export.admin import ImportExportModelAdmin
 from import_export import resources, fields
 from import_export.widgets import ForeignKeyWidget
-from .models import Campus, Building, FieldAsset, Rack, ServerAsset
+from .models import Campus, Building, FieldAsset, PMRecord, Rack, ServerAsset
 
 # --- 장고 관리자 화면 전역(Global) 설정 ---
 admin.site.site_header = 'MIRERO ITAM 관리자 페이지'
@@ -69,6 +69,13 @@ class RackAdmin(ImportExportModelAdmin):
 
 @admin.register(FieldAsset)
 class FieldAssetAdmin(admin.ModelAdmin):
-    list_display = ('hostname', 'site_group', 'complex', 'product', 'status', 'model_name', 'pm_date')
-    list_filter = ('complex', 'product', 'status', 'pm_status', 'ipmi_status')
+    list_display = ('hostname', 'site_group', 'complex', 'product', 'status', 'model_name', 'pm_date', 'locally_modified')
+    list_filter = ('complex', 'product', 'status', 'pm_status', 'ipmi_status', 'locally_modified')
     search_fields = ('hostname', 'serial_number', 'ipmi_ip', 'public_ip', 'private_ip', 'model_name')
+
+
+@admin.register(PMRecord)
+class PMRecordAdmin(admin.ModelAdmin):
+    list_display = ('asset', 'pm_date', 'pm_status', 'worker', 'created_by', 'created_at')
+    list_filter = ('pm_status',)
+    search_fields = ('asset__hostname', 'worker', 'note')

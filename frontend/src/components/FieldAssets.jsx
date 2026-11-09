@@ -2,27 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   MapPin, Search, Upload, Download, X, ExternalLink, AlertTriangle, CheckCircle,
-  Wrench, Wifi, ClipboardList, Server, ChevronUp, ChevronDown,
+  Wrench, Wifi, ClipboardList, Server, ChevronUp, ChevronDown, Plus, Pencil, Trash2,
 } from 'lucide-react';
-import { apiJson } from '../api/client';
+import { apiJson, jsonBody } from '../api/client';
+import FieldAssetForm, { PMRecordForm, PMRecordList } from './FieldAssetForm';
+import { PARTS, STATUS_STYLE } from './fieldAssetConstants';
 
 // monday 'SE파트 - PM 현황' 보드 (항목 링크용)
 const MONDAY_ITEM_URL = 'https://mirero-company.monday.com/boards/9255835900/pulses/';
 
-// monday 보드의 상태 색과 비슷하게 맞춤
-const STATUS_STYLE = {
-  '가동': 'bg-emerald-100 text-emerald-700 border-emerald-200',
-  '확인 필요': 'bg-slate-200 text-slate-700 border-slate-300',
-  '운영 전환': 'bg-slate-600 text-white border-slate-600',
-  'Parts 교체 필요': 'bg-pink-100 text-pink-700 border-pink-200',
-  '유휴 서버 전환': 'bg-sky-100 text-sky-700 border-sky-200',
-  '사용불가': 'bg-red-100 text-red-700 border-red-200',
-  '폐기': 'bg-amber-100 text-amber-700 border-amber-200',
-  'Setup 전': 'bg-blue-100 text-blue-700 border-blue-200',
-};
 const IPMI_STYLE = { '접속 가능': 'text-emerald-600', '접속 불가': 'text-red-600', '확인 필요': 'text-slate-500', 'IP 없음': 'text-amber-600' };
 const ATTENTION_STATUSES = ['확인 필요', 'Parts 교체 필요', '사용불가'];
-const PARTS = [['cpu', 'CPU'], ['memory', 'MEM'], ['network', 'NET'], ['disk', 'DISK'], ['fans', 'FAN'], ['cache_battery', 'BAT']];
 
 const faultParts = (a) => PARTS.filter(([k]) => a.health?.[k] === 'Fault').map(([, label]) => label);
 
@@ -50,7 +40,8 @@ export default function FieldAssets({ showToast }) {
   const [quick, setQuick] = useState('all');
   const [filters, setFilters] = useState({ q: '', complex: '', product: '', site_group: '', status: '' });
   const [sort, setSort] = useState({ key: 'site_group', dir: 'asc' });
-  const [selected, setSelected] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const [formAsset, setFormAsset] = useState(null); // {} = 새 장비, 장비 객체 = 수정
   const [importState, setImportState] = useState(null); // { file, preview, busy }
 
   const load = () => apiJson('/api/field-assets/')
@@ -61,6 +52,33 @@ export default function FieldAssets({ showToast }) {
   useEffect(() => { load(); }, []);
 
   const items = data.items;
+  const selected = items.find(a => a.id === selectedId) || null;
+
+  // 서버가 돌려준 장비 한 대를 목록에 반영 (추가/수정/PM 기록 후)
+  const applyAsset = (asset) => setData(prev => ({
+    ...prev,
+    items: prev.items.some(a => a.id === asset.id)
+      ? prev.items.map(a => (a.id === asset.id ? asset : a))
+      : [...prev.items, asset],
+  }));
+  const saveAsset = (form) => {
+    const isNew = !form.id;
+    return apiJson(isNew ? '/api/field-assets/add/' : `/api/field-assets/update/${form.id}/`, jsonBody(isNew ? 'POST' : 'PUT', form))
+      .then(asset => {
+        applyAsset(asset); setFormAsset(null); setSelectedId(asset.id);
+        showToast(isNew ? '장비를 추가했습니다.' : '장비 정보를 저장했습니다.');
+      })
+      .catch(err => showToast(err.message, 'error'));
+  };
+  const deleteAsset = (asset) => {
+    if (!window.confirm(`[${asset.hostname}] 장비와 PM 기록을 모두 삭제할까요?`)) return;
+    apiJson(`/api/field-assets/delete/${asset.id}/`, { method: 'DELETE' })
+      .then(() => {
+        setData(prev => ({ ...prev, items: prev.items.filter(a => a.id !== asset.id) }));
+        setSelectedId(null); showToast('장비를 삭제했습니다.');
+      })
+      .catch(err => showToast(err.message, 'error'));
+  };
   const options = useMemo(() => ({
     complex: uniq(items, 'complex'), product: uniq(items, 'product'),
     site_group: uniq(items, 'site_group'), status: uniq(items, 'status'),
@@ -121,7 +139,10 @@ export default function FieldAssets({ showToast }) {
   const commitImport = () => {
     setImportState(s => ({ ...s, busy: true }));
     sendImport(importState.file, 'commit')
-      .then(r => { showToast(`신규 ${r.created}대, 갱신 ${r.updated}대를 반영했습니다.`); setImportState(null); load(); })
+      .then(r => {
+        showToast(`신규 ${r.created}대, 갱신 ${r.updated}대를 반영했습니다.${r.kept ? ` (ITAM에서 수정한 ${r.kept}대는 유지)` : ''}`);
+        setImportState(null); load();
+      })
       .catch(err => { showToast(err.message, 'error'); setImportState(s => ({ ...s, busy: false })); });
   };
 
@@ -138,6 +159,9 @@ export default function FieldAssets({ showToast }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={() => setFormAsset({})} className="px-3 py-2 flex items-center bg-blue-600 text-white hover:bg-blue-700 rounded-lg text-xs font-bold">
+            <Plus size={14} className="mr-1.5" /> 장비 추가
+          </button>
           <label className="px-3 py-2 flex items-center bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold cursor-pointer">
             <Upload size={14} className="mr-1.5" /> monday CSV 가져오기
             <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { pickImportFile(e.target.files?.[0]); e.target.value = ''; }} />
@@ -207,9 +231,12 @@ export default function FieldAssets({ showToast }) {
               {rows.map(a => {
                 const faults = faultParts(a);
                 return (
-                  <tr key={a.id} onClick={() => setSelected(a)}
+                  <tr key={a.id} onClick={() => setSelectedId(a.id)}
                     className={`cursor-pointer border-b border-slate-100 hover:bg-blue-50 ${selected?.id === a.id ? 'bg-blue-50' : ''}`}>
-                    <td className="px-2 py-1.5 font-mono font-bold text-blue-700 whitespace-nowrap">{a.hostname}</td>
+                    <td className="px-2 py-1.5 font-mono font-bold text-blue-700 whitespace-nowrap">
+                      {a.hostname}
+                      {a.locally_modified && <span className="ml-1.5 font-sans text-[9px] font-bold text-violet-600 bg-violet-50 border border-violet-200 rounded px-1 py-px align-middle" title="ITAM에서 직접 수정했거나 PM 기록이 있는 장비입니다. monday CSV를 다시 가져와도 덮어쓰지 않습니다.">ITAM</span>}
+                    </td>
                     <td className="px-2 py-1.5 whitespace-nowrap">{a.site_group}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap">{a.complex}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap">{a.product}</td>
@@ -239,13 +266,34 @@ export default function FieldAssets({ showToast }) {
       </div>
 
       {/* 화면 전체(사이드바 포함) 위에 띄우기 위해 body에 렌더링 */}
-      {selected && createPortal(<DetailPanel asset={selected} onClose={() => setSelected(null)} />, document.body)}
+      {selected && !formAsset && createPortal(
+        <DetailPanel asset={selected} onClose={() => setSelectedId(null)} onEdit={() => setFormAsset(selected)}
+          onDelete={() => deleteAsset(selected)} onAssetChanged={applyAsset} showToast={showToast} />, document.body)}
+      {formAsset && createPortal(
+        <FieldAssetForm asset={formAsset} options={options} onCancel={() => setFormAsset(null)} onSave={saveAsset} />, document.body)}
       {importState && createPortal(<ImportConfirm state={importState} onCancel={() => setImportState(null)} onCommit={commitImport} />, document.body)}
     </div>
   );
 }
 
-function DetailPanel({ asset: a, onClose }) {
+function DetailPanel({ asset: a, onClose, onEdit, onDelete, onAssetChanged, showToast }) {
+  const [records, setRecords] = useState(null);
+  const [adding, setAdding] = useState(false);
+  useEffect(() => {
+    apiJson(`/api/field-assets/${a.id}/pm/`)
+      .then(r => setRecords(r.records))
+      .catch(err => { showToast(err.message, 'error'); setRecords([]); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [a.id]);
+  const addRecord = (form) => apiJson(`/api/field-assets/${a.id}/pm/`, jsonBody('POST', form))
+    .then(r => { setRecords(r.records); onAssetChanged(r.asset); setAdding(false); showToast('PM 점검 기록을 추가했습니다.'); })
+    .catch(err => showToast(err.message, 'error'));
+  const deleteRecord = (rec) => {
+    if (!window.confirm(`${rec.pm_date} 점검 기록을 삭제할까요?`)) return;
+    apiJson(`/api/field-assets/pm/delete/${rec.id}/`, { method: 'DELETE' })
+      .then(r => { setRecords(prev => prev.filter(x => x.id !== rec.id)); onAssetChanged(r.asset); showToast('기록을 삭제했습니다.'); })
+      .catch(err => showToast(err.message, 'error'));
+  };
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -265,8 +313,13 @@ function DetailPanel({ asset: a, onClose }) {
             <p className="text-xs text-slate-500">{a.complex} · {a.site_group}</p>
             <h3 className="text-xl font-bold font-mono text-slate-800 break-all">{a.hostname}</h3>
             {a.status && <span className={`inline-block mt-1 px-2 py-0.5 rounded border text-xs font-bold ${STATUS_STYLE[a.status] || 'bg-slate-100 border-slate-200'}`}>{a.status}</span>}
+            {a.locally_modified && <span className="inline-block mt-1 ml-1 px-2 py-0.5 rounded border text-xs font-bold text-violet-700 bg-violet-50 border-violet-200">ITAM에서 수정됨</span>}
           </div>
-          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg"><X size={18} /></button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button onClick={onEdit} className="p-2 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg" title="정보 수정"><Pencil size={16} /></button>
+            <button onClick={onDelete} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="장비 삭제"><Trash2 size={16} /></button>
+            <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg" title="닫기 (Esc)"><X size={18} /></button>
+          </div>
         </div>
         <div className="p-5 space-y-5">
           <section>
@@ -278,7 +331,7 @@ function DetailPanel({ asset: a, onClose }) {
             <dl>{row('IPMI IP', a.ipmi_ip, true)}{row('IPMI 상태', a.ipmi_status)}{row('Public IP', a.public_ip, true)}{row('Private IP', a.private_ip, true)}</dl>
           </section>
           <section>
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">PM 점검</h4>
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">현재 PM 상태</h4>
             <dl>{row('PM 날짜', a.pm_date)}{row('PM 상태', a.pm_status)}{row('워런티 종료', a.warranty_end)}</dl>
             <div className="grid grid-cols-3 gap-2 mt-3">
               {PARTS.map(([k, label]) => {
@@ -292,6 +345,18 @@ function DetailPanel({ asset: a, onClose }) {
                 );
               })}
             </div>
+          </section>
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">PM 점검 기록</h4>
+              {!adding && (
+                <button onClick={() => setAdding(true)} className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center">
+                  <Plus size={12} className="mr-0.5" /> 점검 기록 추가
+                </button>
+              )}
+            </div>
+            {adding && <PMRecordForm asset={a} onCancel={() => setAdding(false)} onSave={addRecord} />}
+            <PMRecordList records={records} onDelete={deleteRecord} />
           </section>
           <section>
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">비고</h4>
@@ -327,6 +392,7 @@ function ImportConfirm({ state, onCancel, onCommit }) {
                 <div className="bg-red-50 rounded-lg p-3"><div className="text-2xl font-black text-red-600">{p.errors.length}</div><div className="text-xs text-slate-500">오류(제외)</div></div>
               </div>
               <p className="text-slate-600">같은 monday ID의 장비는 새 값으로 갱신하고, 파일에 없는 기존 장비는 그대로 둡니다.</p>
+              {p.kept > 0 && <p className="text-violet-700 mt-1">ITAM에서 직접 수정한 장비 <b>{p.kept}대</b>는 덮어쓰지 않고 유지합니다.</p>}
               {p.errors.length > 0 && (
                 <ul className="mt-3 max-h-40 overflow-y-auto text-xs text-red-600 bg-red-50 rounded-lg p-2 space-y-0.5">
                   {p.errors.map(e => <li key={e.line}>{e.line}행 {e.hostname}: {e.error}</li>)}
