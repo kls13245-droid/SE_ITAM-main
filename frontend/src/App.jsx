@@ -14,7 +14,8 @@ import ServerForm from './components/ServerForm';
 import { apiFetch, apiJson, loadCsrfToken, setCsrfToken } from './api/client';
 import ImportCsvModal from './components/ImportCsvModal';
 import FieldAssets from './components/FieldAssets';
-import { matchesSearch, primaryIp } from './utils/server';
+import { matchesSearch, primaryIp, matchesFieldSearch, fieldIp } from './utils/server';
+import { STATUS_STYLE as FIELD_STATUS_STYLE } from './components/fieldAssetConstants';
 
 export default function App() {
   const [siteData, setSiteData] = useState([]);
@@ -50,6 +51,8 @@ export default function App() {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [view, setView] = useState('topology'); // 'topology' | 'field' (현장 장비)
+  const [fieldAssets, setFieldAssets] = useState([]); // 전체 검색용 현장 장비 목록
+  const [fieldFocusId, setFieldFocusId] = useState(null); // 검색에서 고른 현장 장비
   const [serverHistory, setServerHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
@@ -213,7 +216,7 @@ export default function App() {
   }, [siteData]);
 
   const globalSearchResults = useMemo(() => {
-    if (!searchTerm.trim()) return [];
+    if (!searchTerm.trim()) return { items: [], total: 0 };
     const term = searchTerm.toLowerCase();
     const results = [];
     siteData.forEach(campus => campus.buildings?.forEach(building => building.racks?.forEach(rack => rack.servers?.forEach(server => {
@@ -221,8 +224,25 @@ export default function App() {
         results.push({ campus, building, rack, server });
       }
     }))));
-    return results.slice(0, 10); 
+    return { items: results.slice(0, 10), total: results.length };
   }, [siteData, searchTerm]);
+
+  // 검색을 시작할 때마다 현장 장비 목록을 새로 받아온다 (현장 장비 화면에서 고친 내용 반영)
+  const isSearching = searchTerm.trim() !== '';
+  useEffect(() => {
+    if (!isSearching || !isAuthenticated) return;
+    apiJson('/api/field-assets/').then(d => setFieldAssets(d.items)).catch(() => {});
+  }, [isSearching, isAuthenticated]);
+
+  const fieldSearchResults = useMemo(() => {
+    if (!isSearching) return { items: [], total: 0 };
+    const found = fieldAssets.filter(a => matchesFieldSearch(a, searchTerm));
+    return { items: found.slice(0, 10), total: found.length };
+  }, [fieldAssets, searchTerm, isSearching]);
+
+  const handleFieldSearchSelect = (asset) => {
+    setView('field'); setFieldFocusId(asset.id); setSearchTerm('');
+  };
 
   // ⭐️ 분리된 스마트 그룹화 로직 (전기, PubLAN, PrivLAN, IP 독립 계산)
   const summaryStats = useMemo(() => {
@@ -876,18 +896,46 @@ export default function App() {
           </div>
           <div className="flex-1 max-w-lg mx-4 relative z-50">
             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"><Search size={16} className={searchTerm ? 'text-blue-500' : 'text-slate-400'} /></div>
-            <input type="text" placeholder="전체 자산 검색 (Hostname, IP, 모델명 입력)..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-100 border border-slate-200 rounded-full py-2 pl-11 pr-4 text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-inner" />
+            <input type="text" placeholder="전체 자산 검색 (Hostname, IP, 모델명, S/N) · 랙 + 현장 장비" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-100 border border-slate-200 rounded-full py-2 pl-11 pr-4 text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-inner" />
             {searchTerm && (
               <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden max-h-[400px] overflow-y-auto animate-in fade-in">
-                {globalSearchResults.length > 0 ? (
-                  <div className="py-2"><div className="px-4 py-2 text-[10px] font-bold text-slate-400 uppercase">검색 결과</div>
-                    {globalSearchResults.map((res, idx) => (
-                      <div key={idx} onClick={() => handleGlobalSearchSelect(res)} className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 flex items-center justify-between gap-2">
-                        <div className="flex flex-col gap-1 min-w-0">
+                {globalSearchResults.total + fieldSearchResults.total > 0 ? (
+                  <div className="py-1">
+                    {globalSearchResults.total > 0 && (
+                      <div className="px-4 pt-2 pb-1 text-[10px] font-bold text-slate-400 uppercase flex justify-between">
+                        <span>랙 장비</span><span>{globalSearchResults.total > 10 ? `${globalSearchResults.total}건 중 10건` : `${globalSearchResults.total}건`}</span>
+                      </div>
+                    )}
+                    {globalSearchResults.items.map((res, idx) => (
+                      <div key={`r${idx}`} onClick={() => handleGlobalSearchSelect(res)} className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 flex items-center justify-between gap-2">
+                        <div className="flex flex-col gap-1 min-w-0 flex-1">
                           <div className="flex justify-between items-center"><span className="font-bold text-blue-700 font-mono text-sm">{res.server.hostname}</span><span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-500 border border-slate-200">{primaryIp(res.server) || 'IP 없음'}</span></div>
                           <div className="flex justify-between items-end"><span className="text-xs text-slate-500">{res.server.model_name}</span><div className="text-[10px] font-medium text-slate-400 flex items-center"><MapPin size={10} className="mr-1" />{res.building.name} {'>'} {res.rack.name} ({res.server.start_u}U)</div></div>
                         </div>
                         <span className="text-[10px] font-bold text-blue-600 shrink-0">이동</span>
+                      </div>
+                    ))}
+                    {fieldSearchResults.total > 0 && (
+                      <div className="px-4 pt-3 pb-1 text-[10px] font-bold text-orange-500 uppercase flex justify-between">
+                        <span>현장 장비 (PM)</span><span>{fieldSearchResults.total > 10 ? `${fieldSearchResults.total}건 중 10건` : `${fieldSearchResults.total}건`}</span>
+                      </div>
+                    )}
+                    {fieldSearchResults.items.map(a => (
+                      <div key={`f${a.id}`} onClick={() => handleFieldSearchSelect(a)} className="px-4 py-3 hover:bg-orange-50 cursor-pointer border-b border-slate-50 flex items-center justify-between gap-2">
+                        <div className="flex flex-col gap-1 min-w-0 flex-1">
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="font-bold text-orange-700 font-mono text-sm truncate">{a.hostname}</span>
+                            <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-500 border border-slate-200 shrink-0">{fieldIp(a) || 'IP 없음'}</span>
+                          </div>
+                          <div className="flex justify-between items-end gap-2">
+                            <span className="text-xs text-slate-500 truncate">
+                              {a.status && <span className={`mr-1.5 px-1 py-px rounded border text-[9px] font-bold ${FIELD_STATUS_STYLE[a.status] || 'bg-slate-100 border-slate-200'}`}>{a.status}</span>}
+                              {a.model_name}
+                            </span>
+                            <div className="text-[10px] font-medium text-slate-400 flex items-center shrink-0"><MapPin size={10} className="mr-1" />{a.complex} {'>'} {a.site_group}</div>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold text-orange-600 shrink-0">이동</span>
                       </div>
                     ))}
                   </div>
@@ -901,7 +949,7 @@ export default function App() {
         <main className="flex-1 overflow-y-auto bg-slate-50 p-6 flex relative z-0">
           
           {view === 'field' ? (
-            <FieldAssets showToast={showToast} />
+            <FieldAssets showToast={showToast} focusId={fieldFocusId} onFocusHandled={() => setFieldFocusId(null)} />
           ) : !selectedBuilding ? (
             <Dashboard stats={dashboardStats} onOpenStatus={openStatusDrillDown} />
           ) : !selectedRack ? (

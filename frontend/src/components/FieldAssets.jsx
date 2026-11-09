@@ -34,7 +34,7 @@ const COLUMNS = [
 const uniq = (items, key) => [...new Set(items.map(i => i[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
 const fmtDateTime = (v) => (v ? new Date(v).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }) : '-');
 
-export default function FieldAssets({ showToast }) {
+export default function FieldAssets({ showToast, focusId, onFocusHandled }) {
   const [data, setData] = useState({ items: [], last_imported_at: null });
   const [loading, setLoading] = useState(true);
   const [quick, setQuick] = useState('all');
@@ -53,6 +53,13 @@ export default function FieldAssets({ showToast }) {
 
   const items = data.items;
   const selected = items.find(a => a.id === selectedId) || null;
+
+  // 상단 전체 검색에서 고른 장비를 바로 열기 (목록을 다시 받아온 뒤)
+  useEffect(() => {
+    if (!focusId) return;
+    load().then(() => { setSelectedId(focusId); onFocusHandled?.(); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId]);
 
   // 서버가 돌려준 장비 한 대를 목록에 반영 (추가/수정/PM 기록 후)
   const applyAsset = (asset) => setData(prev => ({

@@ -13,5 +13,17 @@ export const matchesSearch = (server, term) => {
   if (!t) return false;
   return (server.hostname || '').toLowerCase().includes(t)
     || (server.model_name || '').toLowerCase().includes(t)
+    || String(server.specs?.serial_number || '').toLowerCase().includes(t)
     || serverIps(server).some(ip => ip.includes(t));
+};
+
+// 현장 장비(PM) 검색: 호스트명 / 모델 / S/N / 현장 / IP
+export const fieldIp = (asset) => asset.ipmi_ip || asset.public_ip || asset.private_ip || '';
+
+export const matchesFieldSearch = (asset, term) => {
+  const t = (term || '').trim().toLowerCase();
+  if (!t) return false;
+  return [asset.hostname, asset.model_name, asset.serial_number, asset.site_group,
+    asset.ipmi_ip, asset.public_ip, asset.private_ip]
+    .some(v => (v || '').toLowerCase().includes(t));
 };
