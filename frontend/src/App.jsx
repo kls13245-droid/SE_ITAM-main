@@ -250,6 +250,19 @@ export default function App() {
     return { items: found.slice(0, 10), total: found.length };
   }, [fieldAssets, searchTerm, isSearching]);
 
+  // 현장 장비 상세의 '랙에서 보기': 최신 랙 데이터를 받아 해당 랙·장비로 이동
+  const openRackFromField = (link) => {
+    apiJson('/api/site-data/').then(data => {
+      setSiteData(data);
+      const campus = data.find(c => c.id === link.campus_id);
+      const building = campus?.buildings.find(b => b.id === link.building_id);
+      const rack = building?.racks.find(r => r.id === link.rack_id);
+      const server = rack?.servers.find(sv => sv.id === link.server_id);
+      if (!rack) { showToast('랙을 찾을 수 없습니다. 새로고침해 주세요.', 'error'); return; }
+      handleGlobalSearchSelect({ campus, building, rack, server: server || null });
+    }).catch(err => showToast(err.message, 'error'));
+  };
+
   const handleFieldSearchSelect = (asset) => {
     setView('field'); setFieldFocusId(asset.id); setSearchTerm('');
   };
@@ -958,7 +971,8 @@ export default function App() {
         <main className="flex-1 overflow-y-auto bg-slate-50 p-6 flex relative z-0">
           
           {view === 'field' ? (
-            <FieldAssets showToast={showToast} focusId={fieldFocusId} onFocusHandled={() => setFieldFocusId(null)} askDelete={askDelete} />
+            <FieldAssets showToast={showToast} focusId={fieldFocusId} onFocusHandled={() => setFieldFocusId(null)} askDelete={askDelete}
+              onPlaced={() => fetchSiteData(true)} onOpenRack={openRackFromField} />
           ) : !selectedBuilding ? (
             <Dashboard stats={dashboardStats} onOpenStatus={openStatusDrillDown} />
           ) : !selectedRack ? (

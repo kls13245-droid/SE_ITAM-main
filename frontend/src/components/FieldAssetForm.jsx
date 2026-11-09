@@ -88,6 +88,7 @@ export default function FieldAssetForm({ asset, options, onCancel, onSave }) {
           <p className="text-xs text-slate-500 bg-slate-50 rounded-lg p-2.5">
             PM 날짜·결과·부품 상태는 장비 상세의 <b>점검 기록 추가</b>로 입력합니다. 가장 최근 기록이 목록에 반영됩니다.
             {!isNew && asset.monday_item_id && <> 이 장비는 저장 후 monday CSV를 다시 가져와도 덮어쓰지 않습니다.</>}
+            {!isNew && asset.rack && <> 랙에 배치된 장비라 호스트명·모델·상태·S/N·IP는 랙 장비({asset.rack.path})에도 함께 바뀝니다.</>}
           </p>
           <datalist id="fa-complex">{options.complex.map(v => <option key={v} value={v} />)}</datalist>
           <datalist id="fa-site">{options.site_group.map(v => <option key={v} value={v} />)}</datalist>

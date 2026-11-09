@@ -452,3 +452,55 @@ class FieldCsvRegisterTest(FieldAssetTest):
         tpl = self.c.get('/api/field-assets/import/template/').content.decode('utf-8-sig')
         r = self.upload_field(tpl).json()
         self.assertEqual((r['created'], len(r['errors'])), (1, 0), r)
+
+
+class FieldRackSyncTest(AutoPlaceTest):
+    def test_place_via_api_preview_and_commit(self):
+        r = self.post('/api/field-assets/place/', {'mode': 'preview'}).json()
+        self.assertEqual(r['placed'], 5)
+        self.assertEqual(ServerAsset.objects.count(), 0)
+        self.assertEqual(self.c.get('/api/field-assets/').json()['unplaced'], 5)
+        self.assertEqual(self.post('/api/field-assets/place/', {}).json()['placed'], 5)
+        data = self.c.get('/api/field-assets/').json()
+        self.assertEqual(data['unplaced'], 0)
+        dba = next(i for i in data['items'] if i['hostname'] == 'P1D-DBA')
+        self.assertEqual((dba['rack']['path'], dba['rack']['u']), ('Memory > P1D > DM-RACK-01', 'U2~U3'))
+
+    def test_new_asset_then_button_places_only_new(self):
+        self.post('/api/field-assets/place/', {})
+        self.post('/api/field-assets/add/', {'hostname': 'P1D-NEW', 'site_group': 'P1D DM', 'complex': 'Memory', 'product': 'DM'})
+        r = self.post('/api/field-assets/place/', {}).json()
+        self.assertEqual((r['placed'], r['racks_created']), (1, 0))
+        self.assertEqual(ServerAsset.objects.get(hostname='P1D-NEW').start_u, 4)  # 기존 장비 다음 U
+
+    def test_edit_field_asset_syncs_rack_server(self):
+        self.post('/api/field-assets/place/', {})
+        a = FieldAsset.objects.get(hostname='P1D-DBA')
+        s = ServerAsset.objects.get(hostname='P1D-DBA')
+        self.put(f'/api/server/update/{s.id}/', {'start_u': 20, 'specs': {**s.specs, 'power_w': '800'}})
+        r = self.put(f'/api/field-assets/update/{a.id}/', {
+            'hostname': 'P1D-DBA-NEW', 'status': 'Parts 교체 필요', 'serial_number': 'SN9',
+            'ipmi_ip': '100.100.110.9', 'model_name': 'DL360 Gen11'})
+        self.assertEqual(r.status_code, 200, r.content)
+        s.refresh_from_db()
+        self.assertEqual((s.hostname, s.status, s.model_name), ('P1D-DBA-NEW', 'MAINT', 'DL360 Gen11'))
+        self.assertEqual((s.specs['serial_number'], s.specs['mgmt_ip']), ('SN9', '100.100.110.9'))
+        # 랙에서만 관리하는 값은 그대로
+        self.assertEqual((s.start_u, s.specs['power_w']), (20, '800'))
+
+    def test_renamed_duplicate_keeps_suffix(self):
+        self.post('/api/field-assets/place/', {})
+        dup = ServerAsset.objects.get(hostname='ControlPC (2)')
+        a = FieldAsset.objects.get(id=dup.specs['field_asset_id'])
+        self.put(f'/api/field-assets/update/{a.id}/', {'status': '폐기'})
+        dup.refresh_from_db()
+        self.assertEqual((dup.hostname, dup.status), ('ControlPC (2)', 'IDLE'))
+
+    def test_csv_reimport_syncs_rack_server(self):
+        a = FieldAsset.objects.get(hostname='P1D-DBA')
+        a.monday_item_id = '999'; a.save()
+        self.post('/api/field-assets/place/', {})
+        csv = 'monday ID,Hostname,그룹(현장/제품),단지,제품명,상태\n999,P1D-DBA,P1D DM,Memory,DM,사용불가\n'
+        f = SimpleUploadedFile('a.csv', csv.encode('utf-8-sig'), content_type='text/csv')
+        self.c.post('/api/field-assets/import/', {'file': f}, HTTP_X_CSRFTOKEN=self.token)
+        self.assertEqual(ServerAsset.objects.get(hostname='P1D-DBA').status, 'MAINT')

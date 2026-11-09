@@ -435,6 +435,7 @@ def import_field_assets(raw: bytes, dry_run=False):
                         for k, v in values.items():
                             setattr(existing, k, v)
                         existing.save()
+                        sync_rack_server(existing)
                         updated += 1
                     continue
 
@@ -665,3 +666,55 @@ def place_field_assets(dry_run=False):
             transaction.set_rollback(True)
     summary["racks"] = sorted(set(summary["racks"]))
     return summary
+
+
+# ---------------------------------------------------------------------------
+# 현장 장비 ↔ 랙 장비 연결 (배치 후 현장 장비 수정 내용을 랙 장비에 반영)
+# ---------------------------------------------------------------------------
+def rack_servers_by_field_asset(asset_ids=None):
+    """현장 장비 id → 배치된 랙 장비. (랙 장비 specs.field_asset_id 로 연결)"""
+    qs = ServerAsset.objects.select_related("rack__building__campus").filter(rack__isnull=False)
+    result = {}
+    for s in qs:
+        fid = (s.specs or {}).get("field_asset_id") if isinstance(s.specs, dict) else None
+        if fid and (asset_ids is None or int(fid) in asset_ids):
+            result[int(fid)] = s
+    return result
+
+
+def rack_link(server):
+    if not server:
+        return None
+    r = server.rack
+    end = server.start_u + (server.size_u or 1) - 1 if server.start_u else None
+    return {
+        "server_id": server.id, "rack_id": r.id, "building_id": r.building_id, "campus_id": r.building.campus_id,
+        "path": f"{r.building.campus.name} > {r.building.name} > {r.name}",
+        "u": f"U{server.start_u}" + (f"~U{end}" if end and end != server.start_u else "") if server.start_u else "",
+        "hostname": server.hostname,
+    }
+
+
+def sync_rack_server(asset):
+    """현장 장비의 호스트명·모델·상태·S/N·IP를 연결된 랙 장비에 반영. 연결된 랙 장비가 없으면 아무것도 안 함.
+
+    랙 위치·크기·전력·LAN 등 랙에서만 관리하는 값은 건드리지 않는다.
+    호스트명은 같은 건물에 이미 같은 이름이 있으면 바꾸지 않는다.
+    """
+    server = rack_servers_by_field_asset({asset.id}).get(asset.id)
+    if not server:
+        return None
+    specs = dict(server.specs or {})
+    specs["serial_number"] = asset.serial_number
+    for src, dst in (("ipmi_ip", "mgmt_ip"), ("public_ip", "public_ip"), ("private_ip", "private_ip")):
+        raw = getattr(asset, src) or ""
+        specs[dst] = (_clean_ip_for_rack(raw) or "") if raw else ""
+    server.specs = specs
+    server.model_name = asset.model_name
+    server.status = FIELD_STATUS_MAP.get(asset.status, server.status)
+    new_name = asset.hostname.strip()
+    if new_name and new_name.lower() != server.hostname.lower().split(" (")[0] \
+            and not hostname_taken(new_name, exclude_id=server.id, building=server.rack.building):
+        server.hostname = new_name
+    server.save()
+    return server
