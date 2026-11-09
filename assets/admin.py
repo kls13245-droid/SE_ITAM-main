@@ -8,7 +8,8 @@ from .models import Campus, Building, Rack, ServerAsset
 admin.site.site_header = 'MIRERO ITAM 관리자 페이지'
 admin.site.site_title = 'MIRERO ITAM 관리'
 admin.site.index_title = '데이터센터 자산 관리'
-admin.site.site_url = 'http://192.168.70.248:5173/' # 우측 상단 '사이트 보기' 링크를 리액트로 연결!
+from django.conf import settings
+admin.site.site_url = settings.FRONTEND_URL  # 우측 상단 '사이트 보기' 링크 (환경변수 FRONTEND_URL)
 
 # 1. 엑셀 업로드/다운로드 시 사용할 자원(Resource) 설정
 class ServerAssetResource(resources.ModelResource):

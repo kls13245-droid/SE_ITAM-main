@@ -1,5 +1,5 @@
 import React from 'react';
-import { Edit, Plus, X, Save, Server, Database, Network } from 'lucide-react';
+import { Edit, Plus, X, Save, Server, Database, Network, Copy, Activity } from 'lucide-react';
 
 export default function ServerForm({
   editForm,

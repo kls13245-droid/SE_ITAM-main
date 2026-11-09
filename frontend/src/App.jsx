@@ -11,7 +11,9 @@ import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import ServerForm from './components/ServerForm';
-import { apiFetch, API_BASE_URL } from './api/client';
+import { apiFetch, apiJson, loadCsrfToken, setCsrfToken } from './api/client';
+import ImportCsvModal from './components/ImportCsvModal';
+import { matchesSearch, primaryIp } from './utils/server';
 
 export default function App() {
   const [siteData, setSiteData] = useState([]);
@@ -45,6 +47,7 @@ export default function App() {
   const ITEMS_PER_PAGE = 10; 
 
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [serverHistory, setServerHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
@@ -69,8 +72,9 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const fetchSiteData = () => {
-    setLoading(true);
+  // silent: 화면 전체 로딩 표시 없이 새로고침하고, 보고 있던 건물/랙/장비 선택은 새 데이터로 다시 맞춘다
+  const fetchSiteData = (silent = false) => {
+    if (!silent) setLoading(true);
     setApiError(null);
     apiFetch(`/api/site-data/`) 
       .then(res => {
@@ -79,6 +83,12 @@ export default function App() {
       })
       .then(data => {
         setSiteData(data);
+        const campus = data.find(c => c.buildings?.some(b => b.id === selectedBuilding?.id));
+        const building = campus?.buildings.find(b => b.id === selectedBuilding?.id);
+        setSelectedBuilding(building ? { ...building, campusName: campus.name } : null);
+        const rack = building?.racks.find(r => r.id === selectedRack?.id) || null;
+        setSelectedRack(rack);
+        setSelectedServer(prev => (prev && !prev.isNew ? rack?.servers.find(s => s.id === prev.id) || null : prev));
         setLoading(false);
       })
       .catch(err => {
@@ -90,7 +100,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    apiFetch('/api/me/')
+    loadCsrfToken().then(() => apiFetch('/api/me/'))
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data?.authenticated) {
@@ -117,6 +127,7 @@ export default function App() {
     .then(res => res.json().then(data => ({ ok: res.ok, data })))
     .then(({ ok, data }) => {
       if (ok) {
+        setCsrfToken(data.csrf_token);
         localStorage.setItem('itam_auth', 'true');
         localStorage.setItem('itam_user', data.username);
         setIsAuthenticated(true);
@@ -130,6 +141,7 @@ export default function App() {
 
   const handleLogout = () => {
     apiFetch('/api/logout/', { method: 'POST' }).finally(() => {
+      loadCsrfToken();
       localStorage.removeItem('itam_auth');
       localStorage.removeItem('itam_user');
       setIsAuthenticated(false);
@@ -203,7 +215,7 @@ export default function App() {
     const term = searchTerm.toLowerCase();
     const results = [];
     siteData.forEach(campus => campus.buildings?.forEach(building => building.racks?.forEach(rack => rack.servers?.forEach(server => {
-      if ((server.hostname && server.hostname.toLowerCase().includes(term)) || (server.specs?.ip && server.specs.ip.includes(term)) || (server.model_name && server.model_name.toLowerCase().includes(term))) {
+      if (matchesSearch(server, term)) {
         results.push({ campus, building, rack, server });
       }
     }))));
@@ -332,124 +344,84 @@ export default function App() {
 
   const handleSaveCampus = () => {
     if (!newCampusName.trim()) { showToast("캠퍼스 이름을 입력해주세요.", "error"); return; }
-    apiFetch(`/api/campus/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCampusName }) })
-    .then(res => { if (!res.ok) throw new Error('저장 실패'); return res.json(); })
+    apiJson(`/api/campus/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newCampusName }) })
     .then(savedCampus => {
       setSiteData([...siteData, { ...savedCampus, buildings: [] }]);
       setIsAddingCampus(false); setNewCampusName(''); showToast("캠퍼스가 추가되었습니다.", "success");
-    }).catch(err => showToast("오류가 발생했습니다.", "error"));
+    }).catch(err => showToast(err.message, 'error'));
   };
 
   const handleSaveBuilding = () => {
     if (!newBuildingName.trim()) { showToast("건물 이름을 입력해주세요.", "error"); return; }
-    apiFetch(`/api/building/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campus_id: targetCampusId, name: newBuildingName }) })
-    .then(res => { if (!res.ok) throw new Error('저장 실패'); return res.json(); })
+    apiJson(`/api/building/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ campus_id: targetCampusId, name: newBuildingName }) })
     .then(savedBuilding => {
       setSiteData(siteData.map(c => c.id === targetCampusId ? { ...c, buildings: [...(c.buildings || []), { ...savedBuilding, racks: [] }] } : c));
       setIsAddingBuilding(false); setNewBuildingName(''); setTargetCampusId(null); setExpandedCampus(targetCampusId); showToast("건물이 추가되었습니다.", "success");
-    }).catch(err => showToast("오류가 발생했습니다.", "error"));
+    }).catch(err => showToast(err.message, 'error'));
   };
 
 
   const handleRenameCampus = (campus) => {
     const name = window.prompt('캠퍼스 이름', campus.name);
     if (!name || name === campus.name) return;
-    apiFetch(`/api/campus/update/${campus.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
-      .then(res => { if (!res.ok) throw new Error(); return res.json(); })
+    apiJson(`/api/campus/update/${campus.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
       .then(() => { setSiteData(siteData.map(c => c.id === campus.id ? { ...c, name } : c)); showToast('캠퍼스 이름이 수정되었습니다.'); })
-      .catch(() => showToast('수정 실패', 'error'));
+      .catch(err => showToast(err.message, 'error'));
   };
   const handleDeleteCampus = (campus) => {
     if (!window.confirm(`${campus.name} 캠퍼스와 하위 데이터를 삭제할까요?`)) return;
-    apiFetch(`/api/campus/delete/${campus.id}/`, { method: 'DELETE' })
-      .then(res => { if (!res.ok) throw new Error(); })
+    apiJson(`/api/campus/delete/${campus.id}/`, { method: 'DELETE' })
       .then(() => { setSiteData(siteData.filter(c => c.id !== campus.id)); goHome(); showToast('캠퍼스가 삭제되었습니다.'); })
-      .catch(() => showToast('삭제 실패', 'error'));
+      .catch(err => showToast(err.message, 'error'));
   };
   const handleRenameBuilding = (building) => {
     const name = window.prompt('건물 이름', building.name);
     if (!name || name === building.name) return;
-    apiFetch(`/api/building/update/${building.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
-      .then(res => { if (!res.ok) throw new Error(); return res.json(); })
+    apiJson(`/api/building/update/${building.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
       .then(() => {
         setSiteData(siteData.map(c => ({ ...c, buildings: c.buildings?.map(b => b.id === building.id ? { ...b, name } : b) })));
         if (selectedBuilding?.id === building.id) setSelectedBuilding({ ...selectedBuilding, name });
         showToast('건물 이름이 수정되었습니다.');
       })
-      .catch(() => showToast('수정 실패', 'error'));
+      .catch(err => showToast(err.message, 'error'));
   };
   const handleDeleteBuilding = (building) => {
     if (!window.confirm(`${building.name} 건물과 하위 랙을 삭제할까요?`)) return;
-    apiFetch(`/api/building/delete/${building.id}/`, { method: 'DELETE' })
-      .then(res => { if (!res.ok) throw new Error(); })
+    apiJson(`/api/building/delete/${building.id}/`, { method: 'DELETE' })
       .then(() => {
         setSiteData(siteData.map(c => ({ ...c, buildings: c.buildings?.filter(b => b.id !== building.id) })));
         if (selectedBuilding?.id === building.id) goHome();
         showToast('건물이 삭제되었습니다.');
       })
-      .catch(() => showToast('삭제 실패', 'error'));
+      .catch(err => showToast(err.message, 'error'));
   };
   const handleRenameRack = (rack) => {
     const name = window.prompt('랙 이름', rack.name);
     if (!name || name === rack.name) return;
-    apiFetch(`/api/rack/update/${rack.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
-      .then(res => { if (!res.ok) throw new Error(); return res.json(); })
+    apiJson(`/api/rack/update/${rack.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
       .then(() => {
         const updated = { ...selectedBuilding, racks: selectedBuilding.racks.map(r => r.id === rack.id ? { ...r, name } : r) };
         setSelectedBuilding(updated);
         if (selectedRack?.id === rack.id) setSelectedRack({ ...selectedRack, name });
         showToast('랙 이름이 수정되었습니다.');
       })
-      .catch(() => showToast('수정 실패', 'error'));
+      .catch(err => showToast(err.message, 'error'));
   };
   const handleDeleteRack = (rack) => {
     if (!window.confirm(`${rack.name} 랙과 장비를 삭제할까요?`)) return;
-    apiFetch(`/api/rack/delete/${rack.id}/`, { method: 'DELETE' })
-      .then(res => { if (!res.ok) throw new Error(); })
+    apiJson(`/api/rack/delete/${rack.id}/`, { method: 'DELETE' })
       .then(() => {
         setSelectedBuilding({ ...selectedBuilding, racks: selectedBuilding.racks.filter(r => r.id !== rack.id) });
         if (selectedRack?.id === rack.id) setSelectedRack(null);
         showToast('랙이 삭제되었습니다.');
       })
-      .catch(() => showToast('삭제 실패', 'error'));
+      .catch(err => showToast(err.message, 'error'));
   };
-  const guessSizeU = (model) => {
-    const name = (model || '').toUpperCase().replace(/[\s\-_]/g, '');
-    const map = [['R760XA',2],['R760',2],['R660XS',1],['R660',1],['R7715',2],['R470',1],['R360',1],['DL380',2],['DL360',1],['DL320',1],['DL20',1],['A400',4],['A250',2],['FAS2820',2],['FAS7200',6],['UNITY380',2],['POWERSCALE',4],['H700',4],['X20',3],['MDS9148',1],['MDS9132',1],['S5148',1],['S4148',1],['S5248',1],['S3248',1],['JL814A',1],['7010TX',1],['7050SX',1],['THUNDER',1],['CL5716',1],['R650',1],['R750',2],['EF300',2],['KVM',1]];
-    return map.find(([k]) => name.includes(k))?.[1] || 1;
-  };
-  const handleImportCsv = async (file) => {
-    if (!selectedRack) { showToast('랙을 먼저 선택하세요.', 'error'); return; }
-    const text = await file.text();
-    const lines = text.split(/\r?\n/).filter(Boolean);
-    const headers = lines[0].split(',').map(h => h.replaceAll('"','').trim().toLowerCase());
-    const idx = (name) => headers.findIndex(h => h.includes(name));
-    const rows = lines.slice(1).map(line => {
-      const cols = line.split(',').map(c => c.replaceAll('"','').trim());
-      return {
-        hostname: cols[idx('hostname')] || cols[0],
-        model_name: cols[idx('model')] || '',
-        status: cols[idx('status')] || 'WAIT',
-        start_u: cols[idx('start')] || 1,
-        size_u: cols[idx('size')] || guessSizeU(cols[idx('model')] || ''),
-        power_w: cols[idx('power')] || '',
-        public_ip: cols[idx('public')] || '',
-        private_ip: cols[idx('private')] || '',
-        mgmt_ip: cols[idx('mgmt')] || '',
-      };
-    });
-    apiFetch('/api/server/import/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rack_id: selectedRack.id, rows }) })
-      .then(res => res.json())
-      .then(data => { showToast(`${data.created || 0}대 가져왔습니다.`); fetchSiteData(); })
-      .catch(() => showToast('가져오기 실패', 'error'));
-  };
-
   const handleAddRackClick = () => { setNewRackForm({ name: '', location: '', total_u_space: 42 }); setIsAddingRack(true); };
   const handleNewRackChange = (field, value) => setNewRackForm(prev => ({ ...prev, [field]: value }));
   const handleSaveRack = () => {
     if (!newRackForm.name.trim()) { showToast("랙 이름을 입력해주세요.", "error"); return; }
-    apiFetch(`/api/rack/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...newRackForm, building_id: selectedBuilding.id }) })
-    .then(res => { if (!res.ok) throw new Error('저장 실패'); return res.json(); })
+    apiJson(`/api/rack/add/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...newRackForm, building_id: selectedBuilding.id }) })
     .then(savedRack => {
       const newRackData = { ...savedRack, servers: [] };
       const updatedSiteData = siteData.map(c => ({ ...c, buildings: c.buildings?.map(b => {
@@ -460,7 +432,7 @@ export default function App() {
           } return b;
       })}));
       setSiteData(updatedSiteData); setIsAddingRack(false); showToast("새 랙이 추가되었습니다!", "success");
-    }).catch(err => showToast("오류가 발생했습니다.", "error"));
+    }).catch(err => showToast(err.message, 'error'));
   };
 
   const handleEditClick = () => { setEditForm({ ...selectedServer, specs: { ...(selectedServer.specs || {}) } }); setIsEditing(true); setActivePort(null); };
@@ -549,22 +521,20 @@ export default function App() {
     }
 
     const isNew = !editForm.id;
-    const url = isNew ? `${API_BASE_URL}/api/server/add/` : `${API_BASE_URL}/api/server/update/${editForm.id}/`;
+    const url = isNew ? `/api/server/add/` : `/api/server/update/${editForm.id}/`;
     
-    apiFetch(url.replace(API_BASE_URL, ''), { method: isNew ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...editForm, rack_id: selectedRack.id }) })
-    .then(res => { if (!res.ok) throw new Error('저장 실패'); return res.json(); })
+    apiJson(url, { method: isNew ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...editForm, rack_id: selectedRack.id }) })
     .then(savedData => {
       const completeData = { ...editForm, ...savedData };
       updateLocalState(completeData, isNew);
       showToast(isNew ? "새 장비 실장 완료" : "업데이트 완료", "success");
-    }).catch(err => showToast("저장 오류", "error"));
+    }).catch(err => showToast(err.message, 'error'));
   };
 
   const handleDelete = () => {
     if(!window.confirm(`[${selectedServer.hostname}] 장비를 영구 삭제하시겠습니까?`)) return;
-    apiFetch(`/api/server/delete/${selectedServer.id}/`, { method: 'DELETE' })
-    .then(res => {
-      if(!res.ok) throw new Error("삭제 실패");
+    apiJson(`/api/server/delete/${selectedServer.id}/`, { method: 'DELETE' })
+    .then(() => {
       const updatedSiteData = siteData.map(c => ({ 
         ...c, buildings: c.buildings?.map(b => ({ 
           ...b, racks: b.racks?.map(r => {
@@ -577,7 +547,7 @@ export default function App() {
       setSiteData(updatedSiteData);
       setSelectedRack(prev => ({ ...prev, servers: prev.servers.filter(s => s.id !== selectedServer.id) }));
       setSelectedServer(null); setIsEditing(false); showToast("장비가 폐기되었습니다.", "success");
-    }).catch(err => showToast("삭제 중 오류 발생", "error"));
+    }).catch(err => showToast(err.message, 'error'));
   };
 
   const handleDragStart = (e, server) => { e.dataTransfer.setData("serverId", server.id); };
@@ -596,11 +566,10 @@ export default function App() {
     }
     
     const updatedServer = { ...serverToMove, start_u: targetU };
-    apiFetch(`/api/server/update/${serverToMove.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedServer) })
-    .then(res => {
-      if (!res.ok) throw new Error('이동 실패');
+    apiJson(`/api/server/update/${serverToMove.id}/`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatedServer) })
+    .then(() => {
       updateLocalState(updatedServer, false); showToast("장비 위치가 이동되었습니다.", "success");
-    }).catch(err => showToast("이동 중 오류 발생", "error"));
+    }).catch(err => showToast(err.message, 'error'));
   };
 
   const updateLocalState = (savedData, isNew) => {
@@ -776,7 +745,7 @@ export default function App() {
   const filteredServers = useMemo(() => {
     if (!selectedRack || !searchTerm) return selectedRack?.servers || [];
     const term = searchTerm.toLowerCase();
-    return selectedRack.servers.filter(s => (s.hostname && s.hostname.toLowerCase().includes(term)) || (s.specs?.ip && s.specs.ip.includes(term)) || (s.model_name && s.model_name.toLowerCase().includes(term)));
+    return selectedRack.servers.filter(s => matchesSearch(s, term));
   }, [selectedRack, searchTerm]);
 
   // ⭐️ 48포트 스위치 렌더링 로직
@@ -909,7 +878,7 @@ export default function App() {
                     {globalSearchResults.map((res, idx) => (
                       <div key={idx} onClick={() => handleGlobalSearchSelect(res)} className="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 flex items-center justify-between gap-2">
                         <div className="flex flex-col gap-1 min-w-0">
-                          <div className="flex justify-between items-center"><span className="font-bold text-blue-700 font-mono text-sm">{res.server.hostname}</span><span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-500 border border-slate-200">{res.server.specs?.ip || 'IP 없음'}</span></div>
+                          <div className="flex justify-between items-center"><span className="font-bold text-blue-700 font-mono text-sm">{res.server.hostname}</span><span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded font-mono text-slate-500 border border-slate-200">{primaryIp(res.server) || 'IP 없음'}</span></div>
                           <div className="flex justify-between items-end"><span className="text-xs text-slate-500">{res.server.model_name}</span><div className="text-[10px] font-medium text-slate-400 flex items-center"><MapPin size={10} className="mr-1" />{res.building.name} {'>'} {res.rack.name} ({res.server.start_u}U)</div></div>
                         </div>
                         <span className="text-[10px] font-bold text-blue-600 shrink-0">이동</span>
@@ -968,7 +937,7 @@ export default function App() {
                     <div className="flex items-center justify-between border-b border-slate-200 pb-3 mb-4 shrink-0">
                       <h2 className="text-xl font-bold text-slate-800 flex items-center"><List className="text-blue-500 mr-2" size={20} /> 랙 자산 및 자원 할당 명세서</h2>
                       <div className="flex items-center gap-2">
-                        <label className="px-3 py-1.5 flex items-center bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold transition-colors shadow-sm cursor-pointer">CSV 가져오기<input type="file" accept=".csv" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleImportCsv(e.target.files[0]); e.target.value=''; }} /></label>
+                        <button onClick={() => setShowImport(true)} className="px-3 py-1.5 flex items-center bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold transition-colors shadow-sm">CSV 가져오기</button>
                         <button onClick={handleExportExcel} className="px-3 py-1.5 flex items-center bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold transition-colors shadow-sm" title="CSV 다운로드와 엑셀 붙여넣기용 복사를 함께 수행"><Copy size={14} className="mr-1.5" /> 엑셀 내보내기</button>
 <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full shadow-inner border border-slate-200">총 실장 장비: {(selectedRack.servers?.length || 0)}대</span>
                       </div>
@@ -1257,6 +1226,15 @@ export default function App() {
           )}
 
           {/* 상태 드릴다운 팝업 모달 */}
+          {showImport && selectedRack && (
+            <ImportCsvModal
+              rack={selectedRack}
+              onClose={() => setShowImport(false)}
+              onImported={() => fetchSiteData(true)}
+              showToast={showToast}
+            />
+          )}
+
           {statusModalInfo && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col animate-in zoom-in-95 duration-200">
@@ -1294,7 +1272,7 @@ export default function App() {
                                 {getAssetTypeIcon(server.specs?.asset_type, 14, "mr-1.5 text-slate-400")}
                                 <h4 className="font-bold text-blue-700 group-hover:text-blue-600 font-mono text-base">{server.hostname}</h4>
                               </div>
-                              <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded text-slate-500 font-mono border">{server.specs?.ip || server.specs?.public_ip || 'IP 없음'}</span>
+                              <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded text-slate-500 font-mono border">{primaryIp(server) || 'IP 없음'}</span>
                             </div>
                             <div className="flex justify-between items-end">
                               <span className="text-xs font-medium text-slate-500">{server.model_name || '모델명 없음'}</span>

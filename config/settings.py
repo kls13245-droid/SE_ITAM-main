@@ -129,7 +129,14 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-CORS_ALLOW_ALL_ORIGINS = True
+# 프론트 화면 주소 목록. CSRF 검사와 CORS(다른 포트에서 API 호출 허용)에 같이 쓴다.
+# 화면을 여는 주소가 바뀌면 이 환경변수에 추가해야 저장/삭제가 동작한다.
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get(
+    'CSRF_TRUSTED_ORIGINS', 'http://localhost:5173,http://192.168.70.250:5173'
+).split(',') if o.strip()]
+CORS_ALLOWED_ORIGINS = CSRF_TRUSTED_ORIGINS
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = os.environ.get('CSRF_TRUSTED_ORIGINS', 'http://localhost:5173,http://192.168.70.250:5173').split(',')
+
+# Django 관리자 화면 우측 상단 '사이트 보기' 링크
+FRONTEND_URL = os.environ.get('FRONTEND_URL', '/')
 

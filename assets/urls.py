@@ -3,6 +3,7 @@ from . import views
 
 urlpatterns = [
     # ⭐️ 프론트엔드 로그인 인증 API
+    path('api/csrf/', views.api_csrf, name='api_csrf'),
     path('api/login/', views.api_login, name='api_login'),
     path('api/logout/', views.api_logout, name='api_logout'),
     path('api/me/', views.api_me, name='api_me'),
@@ -21,6 +22,7 @@ urlpatterns = [
     path('api/rack/update/<int:rack_id>/', views.update_rack, name='update_rack'),
     path('api/rack/delete/<int:rack_id>/', views.delete_rack, name='delete_rack'),
     path('api/server/import/', views.import_servers, name='import_servers'),
+    path('api/server/import/template/', views.import_template, name='import_template'),
     
     # 서버 자산 추가 / 수정 / 삭제 API
     path('api/server/add/', views.add_server, name='add_server'),
