@@ -333,3 +333,95 @@ def validate_import(rack, parsed_rows):
             "data": data,
         })
     return results
+
+
+# ---------------------------------------------------------------------------
+# 현장 장비 (monday PM 현황 스냅샷) 가져오기
+# ---------------------------------------------------------------------------
+FIELD_COLUMNS = {
+    # 내부 키: 인식할 열 이름들 (영문 키 / monday 열 제목)
+    "monday_item_id": ["monday_item_id", "monday ID", "item id", "id"],
+    "hostname": ["hostname", "name", "호스트명"],
+    "site_group": ["group", "그룹", "그룹(현장/제품)", "site_group"],
+    "complex": ["complex", "단지"],
+    "product": ["product", "제품명", "제품"],
+    "status": ["status", "상태"],
+    "model_name": ["model", "model_name", "모델"],
+    "serial_number": ["serial_number", "s/n", "sn", "시리얼"],
+    "ipmi_ip": ["ipmi_ip", "ipmi ip"],
+    "public_ip": ["public_ip", "public ip"],
+    "private_ip": ["private_ip", "private ip"],
+    "ipmi_status": ["ipmi_status", "ipmi 상태"],
+    "pm_date": ["pm_date", "pm 날짜"],
+    "pm_status": ["pm_status", "pm 상태"],
+    "warranty_end": ["warranty_end", "워런티 종료", "워런티종료"],
+    "cpu": ["cpu"], "memory": ["memory"], "network": ["network"], "disk": ["disk"],
+    "fans": ["fans"], "cache_battery": ["cache_battery", "cache battery"],
+    "note": ["note", "비고"],
+}
+FIELD_HEADER_MAP = {_norm_header(a): k for k, aliases in FIELD_COLUMNS.items() for a in aliases}
+
+
+def _parse_date(value, label):
+    from datetime import date
+    v = (value or "").strip()
+    if not v:
+        return None
+    try:
+        return date.fromisoformat(v[:10])
+    except ValueError:
+        raise ValidationError(f"{label} 날짜 형식이 올바르지 않습니다: '{v}' (YYYY-MM-DD)")
+
+
+def import_field_assets(raw: bytes, dry_run=False):
+    """monday에서 내보낸 PM 현황 CSV를 현장 장비로 반영한다.
+
+    monday ID가 같은 장비는 갱신, 없으면 새로 만든다. (호스트명은 현장마다 겹칠 수 있어 기준으로 쓰지 않음)
+    파일에 없는 기존 장비는 지우지 않는다.
+    """
+    from django.db import transaction
+    from django.utils import timezone
+    from .models import FieldAsset
+
+    text = decode_csv(raw)
+    rows = [r for r in csv.reader(io.StringIO(text)) if any(c.strip() for c in r)]
+    if not rows:
+        raise ValidationError("CSV 파일이 비어 있습니다.")
+    keys = [FIELD_HEADER_MAP.get(_norm_header(h)) for h in rows[0]]
+    if "hostname" not in keys:
+        raise ValidationError("hostname(또는 Hostname) 열이 없습니다. monday에서 받은 PM 현황 파일인지 확인해 주세요.")
+
+    now = timezone.now()
+    created = updated = 0
+    errors = []
+    with transaction.atomic():
+        for line_no, cols in enumerate(rows[1:], start=2):
+            item = {}
+            for k, v in zip(keys, cols):
+                if k and k not in item:
+                    item[k] = v.strip()
+            try:
+                if not item.get("hostname"):
+                    raise ValidationError("hostname이 비어 있습니다.")
+                values = {
+                    k: item.get(k, "") for k in (
+                        "hostname", "site_group", "complex", "product", "status", "model_name",
+                        "serial_number", "ipmi_ip", "public_ip", "private_ip", "ipmi_status", "pm_status", "note")
+                }
+                values["pm_date"] = _parse_date(item.get("pm_date"), "PM 날짜")
+                values["warranty_end"] = _parse_date(item.get("warranty_end"), "워런티 종료")
+                values["health"] = {p: item.get(p, "") for p in FieldAsset.HEALTH_PARTS}
+                values["imported_at"] = now
+                mid = item.get("monday_item_id") or None
+                if mid:
+                    _, was_created = FieldAsset.objects.update_or_create(monday_item_id=mid, defaults=values)
+                else:
+                    FieldAsset.objects.create(**values)
+                    was_created = True
+                created += was_created
+                updated += not was_created
+            except ValidationError as e:
+                errors.append({"line": line_no, "hostname": item.get("hostname", ""), "error": str(e)})
+        if dry_run:
+            transaction.set_rollback(True)
+    return {"created": created, "updated": updated, "errors": errors, "total": len(rows) - 1}

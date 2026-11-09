@@ -4,7 +4,7 @@ from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 
-from .models import Building, Campus, Rack, ServerAsset
+from .models import Building, Campus, FieldAsset, Rack, ServerAsset
 
 
 class BaseTest(TestCase):
@@ -194,3 +194,50 @@ class SiteDataTest(BaseTest):
             ServerAsset.objects.create(rack=r, hostname=f'h{i}', model_name='m', start_u=1)
         with self.assertNumQueries(6):  # 세션 + 사용자 + 4개 조회
             self.c.get('/api/site-data/')
+
+
+class FieldAssetTest(BaseTest):
+    CSV = ('monday ID,Hostname,그룹(현장/제품),단지,제품명,상태,Model,S/N,IPMI IP,Public IP,Private IP,IPMI 상태,'
+           'PM 날짜,PM 상태,워런티 종료,CPU,Memory,Network,DISK,Fans,Cache Battery,비고\n'
+           '111,ControlPC,1L DM,Foundry,DM,가동,DL20 Gen10,SN1,100.100.110.1,12.0.0.1,100.100.100.1,접속 가능,2026-03-16,완료,,정상,정상,정상,Fault,정상,정상,디스크 교체\n'
+           '222,ControlPC,S5 DAQ,Memory,DAQ,확인 필요,,,,,100.100.100.1,접속 불가,,,,,,,,,,\n')
+
+    def upload_field(self, text, mode='commit'):
+        f = SimpleUploadedFile('pm.csv', text.encode('utf-8-sig'), content_type='text/csv')
+        return self.c.post('/api/field-assets/import/', {'file': f, 'mode': mode}, HTTP_X_CSRFTOKEN=self.token)
+
+    def test_import_allows_same_hostname_and_ip_across_sites(self):
+        r = self.upload_field(self.CSV).json()
+        self.assertEqual((r['created'], r['updated'], len(r['errors'])), (2, 0, 0))
+        a = FieldAsset.objects.get(monday_item_id='111')
+        self.assertEqual(a.health['disk'], 'Fault')
+        self.assertEqual(str(a.pm_date), '2026-03-16')
+        self.assertIsNone(a.warranty_end)
+
+    def test_reimport_updates_by_monday_id(self):
+        self.upload_field(self.CSV)
+        r = self.upload_field(self.CSV.replace('확인 필요', '가동')).json()
+        self.assertEqual((r['created'], r['updated']), (0, 2))
+        self.assertEqual(FieldAsset.objects.count(), 2)
+        self.assertEqual(FieldAsset.objects.get(monday_item_id='222').status, '가동')
+
+    def test_preview_does_not_save(self):
+        r = self.upload_field(self.CSV, mode='preview').json()
+        self.assertEqual(r['created'], 2)
+        self.assertEqual(FieldAsset.objects.count(), 0)
+
+    def test_bad_date_reported(self):
+        r = self.upload_field(self.CSV.replace('2026-03-16', '3월16일')).json()
+        self.assertEqual(len(r['errors']), 1)
+        self.assertEqual(r['created'], 1)
+
+    def test_list_requires_login_and_returns_items(self):
+        self.upload_field(self.CSV)
+        data = self.c.get('/api/field-assets/').json()
+        self.assertEqual(len(data['items']), 2)
+        self.assertIsNotNone(data['last_imported_at'])
+        self.assertEqual(Client().get('/api/field-assets/').status_code, 401)
+
+    def test_field_assets_do_not_appear_in_rack_data(self):
+        self.upload_field(self.CSV)
+        self.assertNotIn('ControlPC', self.c.get('/api/site-data/').content.decode())

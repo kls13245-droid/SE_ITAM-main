@@ -13,6 +13,7 @@ import Dashboard from './components/Dashboard';
 import ServerForm from './components/ServerForm';
 import { apiFetch, apiJson, loadCsrfToken, setCsrfToken } from './api/client';
 import ImportCsvModal from './components/ImportCsvModal';
+import FieldAssets from './components/FieldAssets';
 import { matchesSearch, primaryIp } from './utils/server';
 
 export default function App() {
@@ -48,6 +49,7 @@ export default function App() {
 
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [view, setView] = useState('topology'); // 'topology' | 'field' (현장 장비)
   const [serverHistory, setServerHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
@@ -303,14 +305,15 @@ export default function App() {
     return rows;
   }, [selectedRack]);
 
-  const goHome = () => { setSelectedBuilding(null); setSelectedRack(null); setSelectedServer(null); setIsEditing(false); setSearchTerm(''); setActivePort(null); };
+  const goHome = () => { setView('topology'); setSelectedBuilding(null); setSelectedRack(null); setSelectedServer(null); setIsEditing(false); setSearchTerm(''); setActivePort(null); };
   const handleCampusClick = (campusId) => setExpandedCampus(expandedCampus === campusId ? null : campusId);
-  const handleBuildingClick = (building, campus) => { setSelectedBuilding({ ...building, campusName: campus.name }); setSelectedRack(null); setSelectedServer(null); setIsEditing(false); setActivePort(null); };
+  const handleBuildingClick = (building, campus) => { setView('topology'); setSelectedBuilding({ ...building, campusName: campus.name }); setSelectedRack(null); setSelectedServer(null); setIsEditing(false); setActivePort(null); };
   const handleRackClick = (rack) => { setSelectedRack(rack); setSelectedServer(null); setIsEditing(false); setActivePort(null); };
   const handleRackNameClick = () => { setSelectedServer(null); setIsEditing(false); setActivePort(null); };
   const handleServerClick = (server) => { setSelectedServer(server); setIsEditing(false); setActivePort(null); };
   
   const handleGlobalSearchSelect = (result) => {
+    setView('topology');
     setExpandedCampus(result.campus.id);
     setSelectedBuilding({ ...result.building, campusName: result.campus.name });
     setSelectedRack(result.rack);
@@ -841,7 +844,9 @@ export default function App() {
         targetCampusId={targetCampusId}
         onGoHome={goHome}
         onLogout={handleLogout}
-        onRefresh={fetchSiteData}
+        onRefresh={() => fetchSiteData()}
+        activeView={view}
+        onOpenFieldAssets={() => { setView('field'); setSearchTerm(''); }}
         onStartAddCampus={() => setIsAddingCampus(true)}
         onSaveCampus={handleSaveCampus}
         onCancelCampus={() => { setIsAddingCampus(false); setNewCampusName(''); }}
@@ -861,10 +866,11 @@ export default function App() {
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10 shrink-0">
           <div className="flex items-center text-sm font-medium text-slate-500 flex-1">
             <span className="cursor-pointer hover:text-blue-600 transition-colors" onClick={goHome}>사이트 현황</span>
-            {selectedBuilding && (
+            {view === 'field' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">현장 장비 (PM)</span></>}
+            {view === 'topology' && selectedBuilding && (
               <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="cursor-pointer hover:text-blue-600 transition-colors" onClick={() => { setSelectedBuilding(null); setSelectedRack(null); setSelectedServer(null); setIsEditing(false); }}>{selectedBuilding.campusName}</span><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-blue-600 cursor-pointer hover:underline" onClick={() => handleBuildingClick(selectedBuilding, {name: selectedBuilding.campusName})}>{selectedBuilding.name}</span></>
             )}
-            {selectedRack && (
+            {view === 'topology' && selectedRack && (
               <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold cursor-pointer hover:text-blue-600 hover:underline" onClick={handleRackNameClick}>{selectedRack.name}</span></>
             )}
           </div>
@@ -894,7 +900,9 @@ export default function App() {
 
         <main className="flex-1 overflow-y-auto bg-slate-50 p-6 flex relative z-0">
           
-          {!selectedBuilding ? (
+          {view === 'field' ? (
+            <FieldAssets showToast={showToast} />
+          ) : !selectedBuilding ? (
             <Dashboard stats={dashboardStats} onOpenStatus={openStatusDrillDown} />
           ) : !selectedRack ? (
             <div className="flex-1 animate-in fade-in duration-300">

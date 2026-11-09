@@ -45,6 +45,19 @@ npm run dev -- --host 0.0.0.0
 - 이미 다른 장비가 쓰는 IP는 경고로만 표시합니다. (Virtual IP는 검사하지 않음)
 - 한글 열 이름(호스트명, 모델명, 시작U 등)과 엑셀 기본 CSV(CP949)도 읽습니다.
 
+## 현장 장비 (PM)
+
+고객사 현장에 설치된 장비 목록입니다. 랙 실장도와는 따로 관리합니다. 왼쪽 메뉴 **현장 장비 (PM)**에서 볼 수 있습니다.
+데이터는 monday 'SE파트 - PM 현황' 보드에서 내보낸 CSV를 가져옵니다. (자동 연동은 아직 없음)
+
+- 화면의 **monday CSV 가져오기** 또는 서버에서:
+  ```bash
+  python manage.py import_field_assets monday_PM현황_20261109.csv --dry-run   # 확인만
+  python manage.py import_field_assets monday_PM현황_20261109.csv
+  ```
+- monday 항목 ID가 같은 장비는 갱신하고, 파일에 없는 장비는 지우지 않습니다.
+- 호스트명·IP는 현장마다 겹칠 수 있어 중복 검사를 하지 않습니다.
+
 ## 테스트
 
 ```bash

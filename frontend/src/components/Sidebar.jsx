@@ -1,5 +1,5 @@
 import React from 'react';
-import { Folder, FolderOpen, Plus, RefreshCw, CheckCircle, X, Building, ChevronRight, LogOut, Pencil, Trash2 } from 'lucide-react';
+import { Folder, FolderOpen, Plus, RefreshCw, CheckCircle, X, Building, LogOut, Pencil, Trash2, MapPin } from 'lucide-react';
 
 export default function Sidebar({
   siteData, loading, expandedCampus, selectedBuilding,
@@ -8,6 +8,7 @@ export default function Sidebar({
   onGoHome, onLogout, onRefresh, onStartAddCampus, onSaveCampus, onCancelCampus,
   onCampusClick, onStartAddBuilding, onSaveBuilding, onCancelBuilding, onBuildingClick,
   onRenameCampus, onDeleteCampus, onRenameBuilding, onDeleteBuilding,
+  activeView, onOpenFieldAssets,
 }) {
   return (
     <div className="w-72 bg-slate-900 text-slate-300 flex flex-col shadow-xl z-10 shrink-0">
@@ -19,6 +20,11 @@ export default function Sidebar({
         <button onClick={onLogout} className="p-2 hover:bg-slate-800 rounded-lg text-slate-500 hover:text-red-400" title="로그아웃"><LogOut size={20} /></button>
       </div>
       <div className="overflow-y-auto flex-1 p-3">
+        <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-widest">Field</div>
+        <button onClick={onOpenFieldAssets} className={`w-full flex items-center p-2 rounded mb-4 text-left ${activeView === 'field' ? 'bg-orange-500/20 text-orange-300 font-medium' : 'hover:bg-slate-800'}`}>
+          <MapPin size={18} className={`mr-2 shrink-0 ${activeView === 'field' ? 'text-orange-400' : 'text-slate-500'}`} />
+          <span className="truncate">현장 장비 (PM)</span>
+        </button>
         <div className="text-xs font-semibold text-slate-500 mb-3 px-2 uppercase tracking-widest flex justify-between items-center">
           <span>Site Topology</span>
           <div className="flex items-center gap-1.5">
@@ -57,7 +63,7 @@ export default function Sidebar({
                 )}
                 {campus.buildings?.map(building => (
                   <div key={building.id} className="flex items-center group/b">
-                    <button onClick={() => onBuildingClick(building, campus)} className={`flex-1 flex items-center p-2 rounded mb-1 min-w-0 ${selectedBuilding?.id === building.id ? 'bg-blue-600/20 text-blue-400 font-medium' : 'hover:bg-slate-800 text-sm'}`}>
+                    <button onClick={() => onBuildingClick(building, campus)} className={`flex-1 flex items-center p-2 rounded mb-1 min-w-0 ${activeView !== 'field' && selectedBuilding?.id === building.id ? 'bg-blue-600/20 text-blue-400 font-medium' : 'hover:bg-slate-800 text-sm'}`}>
                       <Building size={14} className="mr-2 opacity-70 shrink-0" /><span className="truncate">{building.name}</span>
                     </button>
                     <button onClick={() => onRenameBuilding(building)} className="opacity-0 group-hover/b:opacity-100 text-slate-400 hover:text-white px-1" title="수정"><Pencil size={12}/></button>

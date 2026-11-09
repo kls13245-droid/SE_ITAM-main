@@ -55,3 +55,39 @@ class ServerAsset(models.Model):
     history = HistoricalRecords()
     def __str__(self):
         return f"{self.hostname or self.model_name} ({self.rack.name if self.rack else '미실장'})"
+
+
+class FieldAsset(models.Model):
+    """고객사 현장에 설치된 장비 (PM 점검 대상). 랙 실장도와는 따로 관리한다.
+
+    지금은 monday 'SE파트 - PM 현황' 보드에서 가져온 스냅샷을 담는다.
+    상태·PM 상태 등은 monday의 표기를 그대로 저장한다.
+    """
+    HEALTH_PARTS = ('cpu', 'memory', 'network', 'disk', 'fans', 'cache_battery')
+
+    monday_item_id = models.CharField(max_length=30, unique=True, null=True, blank=True, verbose_name="monday 항목 ID")
+    hostname = models.CharField(max_length=150, verbose_name="호스트명")
+    site_group = models.CharField(max_length=100, blank=True, verbose_name="현장/제품 그룹")
+    complex = models.CharField(max_length=50, blank=True, verbose_name="단지")
+    product = models.CharField(max_length=50, blank=True, verbose_name="제품명")
+    status = models.CharField(max_length=50, blank=True, verbose_name="상태")
+    model_name = models.CharField(max_length=100, blank=True, verbose_name="모델")
+    serial_number = models.CharField(max_length=100, blank=True, verbose_name="S/N")
+    ipmi_ip = models.CharField(max_length=100, blank=True, verbose_name="IPMI IP")
+    public_ip = models.CharField(max_length=200, blank=True, verbose_name="Public IP")
+    private_ip = models.CharField(max_length=200, blank=True, verbose_name="Private IP")
+    ipmi_status = models.CharField(max_length=50, blank=True, verbose_name="IPMI 상태")
+    pm_date = models.DateField(null=True, blank=True, verbose_name="PM 날짜")
+    pm_status = models.CharField(max_length=50, blank=True, verbose_name="PM 상태")
+    warranty_end = models.DateField(null=True, blank=True, verbose_name="워런티 종료")
+    health = models.JSONField(default=dict, blank=True, verbose_name="부품 상태")
+    note = models.TextField(blank=True, verbose_name="비고")
+    imported_at = models.DateTimeField(null=True, blank=True, verbose_name="마지막 가져온 시각")
+    history = HistoricalRecords()
+
+    class Meta:
+        ordering = ['complex', 'site_group', 'hostname']
+        verbose_name = verbose_name_plural = "현장 장비 (PM)"
+
+    def __str__(self):
+        return f"{self.hostname} ({self.site_group})"

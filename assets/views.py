@@ -9,9 +9,10 @@ from django.http import HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 
-from .models import Building, Campus, Rack, ServerAsset
+from .models import Building, Campus, FieldAsset, Rack, ServerAsset
 from .services import (
-    ValidationError, parse_csv, template_csv, to_int, validate_import, validate_server_payload,
+    ValidationError, import_field_assets, parse_csv, template_csv, to_int, validate_import,
+    validate_server_payload,
 )
 
 SERVER_FIELDS = ('id', 'hostname', 'start_u', 'size_u', 'status', 'model_name',
@@ -317,6 +318,31 @@ def import_servers(request):
         'unknown_columns': unknown,
         'rows': [{k: v for k, v in r.items() if k != 'data'} for r in results],
     })
+
+
+# ---------------------------------------------------------------------------
+# 현장 장비 (PM) - 랙 실장도와 별도
+# ---------------------------------------------------------------------------
+FIELD_ASSET_FIELDS = ('id', 'monday_item_id', 'hostname', 'site_group', 'complex', 'product', 'status',
+                      'model_name', 'serial_number', 'ipmi_ip', 'public_ip', 'private_ip', 'ipmi_status',
+                      'pm_date', 'pm_status', 'warranty_end', 'health', 'note', 'imported_at')
+
+
+@api('GET')
+def field_assets(request):
+    items = list(FieldAsset.objects.values(*FIELD_ASSET_FIELDS))
+    last = max((i['imported_at'] for i in items if i['imported_at']), default=None)
+    return JsonResponse({'items': items, 'last_imported_at': last})
+
+
+@api('POST')
+def import_field_assets_view(request):
+    upload = request.FILES.get('file')
+    if not upload:
+        raise ValidationError('CSV 파일을 선택해 주세요.')
+    if upload.size > 5 * 1024 * 1024:
+        raise ValidationError('파일이 너무 큽니다. (최대 5MB)')
+    return JsonResponse(import_field_assets(upload.read(), dry_run=request.POST.get('mode') == 'preview'))
 
 
 @api('GET')

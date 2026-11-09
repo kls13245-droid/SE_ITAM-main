@@ -2,7 +2,7 @@ from django.contrib import admin
 from import_export.admin import ImportExportModelAdmin
 from import_export import resources, fields
 from import_export.widgets import ForeignKeyWidget
-from .models import Campus, Building, Rack, ServerAsset
+from .models import Campus, Building, FieldAsset, Rack, ServerAsset
 
 # --- 장고 관리자 화면 전역(Global) 설정 ---
 admin.site.site_header = 'MIRERO ITAM 관리자 페이지'
@@ -65,3 +65,10 @@ class RackAdmin(ImportExportModelAdmin):
     # ⭐️ 수정: list_display 맨 앞에 'id'를 추가하여 화면에서 랙 고유번호를 바로 볼 수 있게 만듭니다.
     list_display = ('id', 'name', 'building', 'total_u_space', 'location')
     list_display_links = ('id', 'name') # ID 숫자를 클릭해도 상세 페이지로 들어가게끔 설정
+
+
+@admin.register(FieldAsset)
+class FieldAssetAdmin(admin.ModelAdmin):
+    list_display = ('hostname', 'site_group', 'complex', 'product', 'status', 'model_name', 'pm_date')
+    list_filter = ('complex', 'product', 'status', 'pm_status', 'ipmi_status')
+    search_fields = ('hostname', 'serial_number', 'ipmi_ip', 'public_ip', 'private_ip', 'model_name')
