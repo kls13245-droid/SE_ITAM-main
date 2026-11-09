@@ -87,8 +87,11 @@ def placement_error(rack, start_u, size_u, exclude_id=None, extra=()):
     return None
 
 
-def hostname_taken(hostname, exclude_id=None):
+def hostname_taken(hostname, exclude_id=None, building=None):
+    """같은 건물(현장) 안에서 호스트명이 겹치는지 확인. 현장이 다르면 같은 이름(예: ControlPC)도 허용."""
     qs = ServerAsset.objects.filter(hostname__iexact=hostname.strip())
+    if building is not None:
+        qs = qs.filter(rack__building=building)
     if exclude_id:
         qs = qs.exclude(id=exclude_id)
     return qs.exists()
@@ -121,8 +124,8 @@ def validate_server_payload(rack, data, exclude_id=None):
     hostname = (data.get("hostname") or "").strip()
     if not hostname:
         raise ValidationError("Hostname은 필수입니다.")
-    if hostname_taken(hostname, exclude_id):
-        raise ValidationError(f"같은 호스트명의 장비가 이미 있습니다: {hostname}")
+    if hostname_taken(hostname, exclude_id, building=rack.building):
+        raise ValidationError(f"같은 건물에 같은 호스트명의 장비가 이미 있습니다: {hostname}")
 
     start_u = to_int(data.get("start_u"), "시작 U", required=True, minimum=1)
     size_u = to_int(data.get("size_u"), "크기(U)", minimum=1) or guess_size_u(data.get("model_name"))
@@ -262,8 +265,8 @@ def validate_import(rack, parsed_rows):
                 raise ValidationError("hostname이 비어 있습니다.")
             if hostname.lower() in seen_hosts:
                 raise ValidationError(f"파일 안에서 {seen_hosts[hostname.lower()]}행과 호스트명이 중복됩니다.")
-            if hostname_taken(hostname):
-                raise ValidationError("같은 호스트명의 장비가 이미 등록되어 있습니다.")
+            if hostname_taken(hostname, building=rack.building):
+                raise ValidationError("같은 건물에 같은 호스트명의 장비가 이미 등록되어 있습니다.")
 
             start_u = to_int(row.get("start_u"), "start_u", required=True, minimum=1)
             size_u = to_int(row.get("size_u"), "size_u", minimum=1)
@@ -495,3 +498,122 @@ def refresh_asset_pm(asset):
         asset.health = latest.health
         asset.locally_modified = True
         asset.save()
+
+
+# ---------------------------------------------------------------------------
+# 현장 장비 → 랙 자동(임시) 배치
+# ---------------------------------------------------------------------------
+# monday 그룹 이름 끝에 붙은 제품명 (그룹 = '현장 + 제품')
+PRODUCT_SUFFIXES = ["DMM 25", "MI-MCA", "MiDEWS", "BlueCats", "OPTICA", "AEGIS", "SSAT", "IRIS",
+                    "MiOS", "MMS", "DAQ", "ADC", "DM"]
+FIELD_STATUS_MAP = {
+    "가동": "OPER", "Setup 전": "SETUP", "운영 전환": "SETUP",
+    "확인 필요": "MAINT", "Parts 교체 필요": "MAINT", "사용불가": "MAINT",
+    "유휴 서버 전환": "IDLE", "폐기": "IDLE",
+}
+AUTO_RACK_LOCATION = "자동 배치 (임시) - 실제 위치로 옮겨 주세요"
+AUTO_RACK_HEIGHT = 42
+AUTO_RACK_USABLE = 40  # 맨 위 2U는 스위치 등을 위해 비워 둔다
+
+
+def site_from_group(group):
+    """'P1D MiDEWS' → 'P1D', '1L , 2L ,6L DM' → '1L, 2L, 6L', 'P4  DMM 25' → 'P4'"""
+    g = re.sub(r"\s+", " ", (group or "").strip())
+    for suffix in PRODUCT_SUFFIXES:
+        if g.lower().endswith(" " + suffix.lower()):
+            g = g[: -len(suffix)].strip()
+            break
+    g = re.sub(r"\s*,\s*", ", ", g)
+    return g or "현장 미지정"
+
+
+def guess_asset_type(asset):
+    text = f"{asset.hostname} {asset.model_name}".lower()
+    if any(k in text for k in ("storage", "unity", "pure", "netapp", "powerscale", "x20", "fas")):
+        return "storage"
+    if "switch" in text:
+        return "switch"
+    return "server"
+
+
+def _clean_ip_for_rack(value):
+    """랙 장비의 IP 칸에 넣을 수 있는 값이면 정리해서, 아니면 None."""
+    try:
+        return normalize_ip_list(value)
+    except ValidationError:
+        return None
+
+
+def place_field_assets(dry_run=False):
+    """아직 랙에 배치되지 않은 현장 장비를 단지/현장/제품별 랙에 아래(U1)부터 차례로 넣는다.
+
+    캠퍼스=단지, 건물=현장, 랙='{제품}-RACK-NN'. 랙이 차면 다음 번호 랙을 만든다.
+    이미 배치한 장비(specs.field_asset_id)는 건너뛰므로 여러 번 실행해도 된다.
+    """
+    from collections import defaultdict
+    from django.db import transaction
+    from .models import Building, Campus, FieldAsset, Rack
+
+    placed_ids = {
+        str(s.specs.get("field_asset_id")) for s in ServerAsset.objects.only("specs")
+        if isinstance(s.specs, dict) and s.specs.get("field_asset_id")
+    }
+    todo = [a for a in FieldAsset.objects.order_by("complex", "site_group", "hostname") if str(a.id) not in placed_ids]
+
+    groups = defaultdict(list)
+    for a in todo:
+        groups[(a.complex or "단지 미지정", site_from_group(a.site_group), a.product or "기타")].append(a)
+
+    summary = {"placed": 0, "skipped_already": len(placed_ids), "racks_created": 0,
+               "renamed": [], "ip_fixed": [], "racks": []}
+    with transaction.atomic():
+        for (complex_name, site, product), assets in sorted(groups.items()):
+            campus, _ = Campus.objects.get_or_create(name=complex_name)
+            building, _ = Building.objects.get_or_create(campus=campus, name=site)
+            rack_no, rack, cursor = 0, None, 1
+            for a in sorted(assets, key=lambda x: x.hostname.lower()):
+                size = guess_size_u(a.model_name)
+                # 현재 랙에 자리가 없으면 다음 랙
+                while rack is None or cursor + size - 1 > AUTO_RACK_USABLE:
+                    rack_no += 1
+                    name = f"{product}-RACK-{rack_no:02d}"
+                    rack, created = Rack.objects.get_or_create(
+                        building=building, name=name,
+                        defaults={"location": AUTO_RACK_LOCATION, "total_u_space": AUTO_RACK_HEIGHT})
+                    summary["racks_created"] += created
+                    used = [s.start_u + (s.size_u or 1) - 1 for s in rack.servers.all() if s.start_u]
+                    cursor = max(used, default=0) + 1
+                    summary["racks"].append(f"{complex_name} > {site} > {name}")
+
+                hostname, notes = a.hostname.strip(), []
+                if hostname_taken(hostname, building=building):
+                    n = 2
+                    while hostname_taken(f"{hostname} ({n})", building=building):
+                        n += 1
+                    notes.append(f"monday 원래 이름: {hostname} (같은 현장에 같은 이름이 있어 ({n})을 붙임)")
+                    summary["renamed"].append(f"{site}: {hostname} → {hostname} ({n})")
+                    hostname = f"{hostname} ({n})"
+
+                specs = {"asset_type": guess_asset_type(a), "serial_number": a.serial_number,
+                         "field_asset_id": a.id, "monday_item_id": a.monday_item_id or "",
+                         "power_w": "", "public_lan": "", "private_lan": "", "virtual_ip": "", "os_version": ""}
+                for src, dst in (("ipmi_ip", "mgmt_ip"), ("public_ip", "public_ip"), ("private_ip", "private_ip")):
+                    raw = getattr(a, src) or ""
+                    clean = _clean_ip_for_rack(raw) if raw else ""
+                    if clean is None:
+                        notes.append(f"{src} 원래 값: {raw}")
+                        summary["ip_fixed"].append(f"{a.hostname} {src}={raw}")
+                        clean = ""
+                    specs[dst] = clean
+
+                desc = "\n".join([f"[현장 장비에서 자동 배치] {a.site_group}"] + notes + ([a.note] if a.note else []))
+                ServerAsset.objects.create(
+                    rack=rack, hostname=hostname, model_name=a.model_name, start_u=cursor, size_u=size,
+                    status=FIELD_STATUS_MAP.get(a.status, "WAIT"), description=desc, specs=specs,
+                )
+                cursor += size
+                summary["placed"] += 1
+        if dry_run:
+            transaction.set_rollback(True)
+    summary["racks"] = sorted(set(summary["racks"]))
+    return summary

@@ -308,3 +308,74 @@ class FieldAssetEditTest(FieldAssetTest):
         self.post(f'/api/field-assets/{a.id}/pm/', {'pm_date': '2026-11-01'})
         self.assertEqual(self.delete(f'/api/field-assets/delete/{a.id}/').status_code, 200)
         self.assertEqual(PMRecord.objects.count(), 0)
+
+
+class AutoPlaceTest(BaseTest):
+    def setUp(self):
+        super().setUp()
+        mk = lambda **kw: FieldAsset.objects.create(**{'complex': 'Memory', 'product': 'DM', 'status': '가동', **kw})
+        mk(hostname='P1D-DBA', site_group='P1D DM', model_name='DL380 Gen9', ipmi_ip='100.100.110.1', serial_number='SN1')
+        mk(hostname='ControlPC', site_group='P1D DM', model_name='DL20 Gen10', public_ip='10.1.1.1(2)')
+        mk(hostname='ControlPC', site_group='P2D DM', status='Parts 교체 필요')
+        mk(hostname='ControlPC', site_group='P2D DM')  # 같은 현장에 같은 이름
+        mk(hostname='Pure Storage', site_group='P1D MiDEWS', product='MiDEWS', status='')
+
+    def test_site_from_group(self):
+        from .services import site_from_group
+        self.assertEqual(site_from_group('P1D MiDEWS'), 'P1D')
+        self.assertEqual(site_from_group('1L , 2L ,6L DM'), '1L, 2L, 6L')
+        self.assertEqual(site_from_group('P4  DMM 25'), 'P4')
+        self.assertEqual(site_from_group('천안WP(C3) DAQ'), '천안WP(C3)')
+        self.assertEqual(site_from_group('S5 MI-MCA'), 'S5')
+
+    def test_place_creates_topology_and_servers(self):
+        from .services import place_field_assets
+        r = place_field_assets()
+        self.assertEqual(r['placed'], 5)
+        p1d = Building.objects.get(campus__name='Memory', name='P1D')
+        dm = Rack.objects.get(building=p1d, name='DM-RACK-01')
+        servers = list(dm.servers.order_by('start_u'))
+        self.assertEqual([(s.hostname, s.start_u, s.size_u) for s in servers], [('ControlPC', 1, 1), ('P1D-DBA', 2, 2)])
+        dba = servers[1]
+        self.assertEqual((dba.status, dba.specs['mgmt_ip'], dba.specs['serial_number']), ('OPER', '100.100.110.1', 'SN1'))
+        # 잘못된 IP는 비우고 설명에 원래 값
+        self.assertEqual(servers[0].specs['public_ip'], '')
+        self.assertIn('10.1.1.1(2)', servers[0].description)
+        # 다른 현장의 같은 이름은 그대로, 같은 현장 중복만 번호
+        p2d_names = sorted(ServerAsset.objects.filter(rack__building__name='P2D').values_list('hostname', flat=True))
+        self.assertEqual(p2d_names, ['ControlPC', 'ControlPC (2)'])
+        self.assertEqual(ServerAsset.objects.get(hostname='Pure Storage').specs['asset_type'], 'storage')
+        self.assertEqual(ServerAsset.objects.get(hostname='Pure Storage').status, 'WAIT')
+
+    def test_place_is_idempotent_and_dry_run(self):
+        from .services import place_field_assets
+        self.assertEqual(place_field_assets(dry_run=True)['placed'], 5)
+        self.assertEqual(ServerAsset.objects.count(), 0)
+        place_field_assets()
+        r = place_field_assets()
+        self.assertEqual((r['placed'], r['skipped_already']), (0, 5))
+        self.assertEqual(ServerAsset.objects.count(), 5)
+
+    def test_rack_overflow_creates_next_rack(self):
+        from .services import place_field_assets
+        for i in range(25):
+            FieldAsset.objects.create(hostname=f'DB{i:02d}', site_group='P9 DM', complex='Memory', product='DM', model_name='DL380 Gen9')
+        place_field_assets()
+        racks = Rack.objects.filter(building__name='P9').order_by('name')
+        self.assertEqual([r.name for r in racks], ['DM-RACK-01', 'DM-RACK-02'])
+        self.assertEqual(racks[0].servers.count(), 20)  # 2U x 20 = 40U
+
+    def test_placed_server_can_be_edited_and_moved(self):
+        from .services import place_field_assets
+        place_field_assets()
+        s = ServerAsset.objects.get(hostname='P1D-DBA')
+        r = self.put(f'/api/server/update/{s.id}/', {'start_u': 30})
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_same_hostname_allowed_in_other_building(self):
+        self.add('ControlPC', 1)
+        other = Building.objects.create(campus=self.campus, name='S2')
+        rack2 = Rack.objects.create(building=other, name='R02')
+        r = self.post('/api/server/add/', {'rack_id': rack2.id, 'hostname': 'ControlPC', 'start_u': 1})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.add('controlpc', 5).status_code, 400)  # 같은 건물은 여전히 막음
