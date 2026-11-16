@@ -28,6 +28,7 @@ class MasterList(models.Model):
     values = models.JSONField(default=list, blank=True, verbose_name="값 목록")
     source = models.CharField(max_length=200, blank=True, verbose_name="원본 범위 (예: DB!$B$2:$B$3)")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="수정 시각")
+    history = HistoricalRecords()
 
     class Meta:
         ordering = ['group', 'name']
@@ -43,6 +44,7 @@ class CpuSpec(models.Model):
     clock = models.CharField(max_length=30, blank=True, verbose_name="클럭 (GHz)")
     cores = models.CharField(max_length=30, blank=True, verbose_name="코어 수")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="수정 시각")
+    history = HistoricalRecords()
 
     class Meta:
         ordering = ['name']

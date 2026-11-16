@@ -93,6 +93,14 @@ class MasterImportTest(ReviewBase):
         r = self.upload('/api/reviews/master/import/', make_workbook(cis_r660='Q430-999999'))
         self.assertEqual(r.json()['codes'], {'added': 0, 'changed': 1, 'removed': 0, 'total': 2})
         self.assertEqual(PartCode.objects.get(name='R660').history.count(), 2)
+        # 선택 목록·CPU 사양도 변경 이력이 남는다
+        self.assertEqual(MasterList.objects.get(name='제조사_서버').history.count(), 1)
+        self.assertEqual(CpuSpec.objects.get(name='Xeon Gold 5515').history.count(), 1)
+        cpu = CpuSpec.objects.get(name='Xeon Gold 5515')
+        cpu.cores = '16'
+        cpu.save()
+        self.assertEqual(cpu.history.first().cores, '16')
+        self.assertEqual(cpu.history.last().cores, '8')
 
     def test_master_list_api(self):
         self.upload('/api/reviews/master/import/', make_workbook())

@@ -11,14 +11,14 @@ class PartCodeAdmin(SimpleHistoryAdmin):
 
 
 @admin.register(MasterList)
-class MasterListAdmin(admin.ModelAdmin):
+class MasterListAdmin(SimpleHistoryAdmin):
     list_display = ('name', 'group', 'source', 'updated_at')
     list_filter = ('group',)
     search_fields = ('name',)
 
 
 @admin.register(CpuSpec)
-class CpuSpecAdmin(admin.ModelAdmin):
+class CpuSpecAdmin(SimpleHistoryAdmin):
     list_display = ('name', 'clock', 'cores')
     search_fields = ('name',)
 
