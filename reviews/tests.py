@@ -160,8 +160,12 @@ class ReviewCaseTest(ReviewBase):
 
     def test_update_and_delete_needs_admin(self):
         case_id = self.json('post', '/api/reviews/', {'title': 'A'}).json()['id']
-        r = self.json('put', f'/api/reviews/{case_id}/', {'status': '심의중'})
-        self.assertEqual(r.json()['status'], '심의중')
+        r = self.json('put', f'/api/reviews/{case_id}/', {'status': 'APPROVED'})
+        self.assertEqual(r.json()['status'], 'APPROVED')
+        self.assertEqual(r.json()['status_label'], '승인')
+        # 한글 이름으로 보내도 코드로 저장된다
+        r = self.json('put', f'/api/reviews/{case_id}/', {'status': '구매중'})
+        self.assertEqual(r.json()['status'], 'PURCHASE')
         r = self.json('put', f'/api/reviews/{case_id}/', {'status': '없는상태'})
         self.assertEqual(r.status_code, 400)
         r = self.json('delete', f'/api/reviews/{case_id}/', {})

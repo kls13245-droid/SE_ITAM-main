@@ -58,13 +58,21 @@ class CpuSpec(models.Model):
 # 심의건과 산출물
 # ---------------------------------------------------------------------------
 class ReviewCase(models.Model):
-    STATUS_CHOICES = [('작성중', '작성중'), ('심의중', '심의중'), ('완료', '완료')]
+    # DB에는 영문 코드, 화면에는 한글 (서버 장비 표의 WAIT/'입고 대기'와 같은 방식)
+    STATUS_CHOICES = [
+        ('DRAFT', '작성중'),      # 구매 사양 항목 입력 중
+        ('REVIEW', '심의중'),     # PPT를 만들어 심의에 올림
+        ('APPROVED', '승인'),     # 심의 통과
+        ('PURCHASE', '구매중'),   # 발주 진행
+        ('RECEIVED', '입고완료'), # 장비가 ITAMS에 등록됨
+        ('REJECTED', '반려'),     # 심의에서 떨어짐. 다시 작성중으로 돌릴 수 있음
+    ]
 
     title = models.CharField(max_length=200, verbose_name="업무명")
     line = models.CharField(max_length=100, blank=True, verbose_name="라인명")
     product = models.CharField(max_length=100, blank=True, verbose_name="제품")
     year = models.CharField(max_length=4, blank=True, verbose_name="심의 연도")
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='작성중', verbose_name="상태")
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='DRAFT', verbose_name="상태")
     note = models.TextField(blank=True, verbose_name="메모")
     source_excel = models.FileField(upload_to='reviews/source/', blank=True, verbose_name="구매 사양 엑셀")
     source_name = models.CharField(max_length=255, blank=True, verbose_name="올린 엑셀 파일 이름")

@@ -11,11 +11,19 @@ import { apiJson, jsonBody, API_BASE_URL } from '../api/client';
  *  - 기준정보: 심의 매크로 엑셀의 '이름 관리자' 내용 (품목 CIS 코드, 선택 목록, CPU 사양)
  */
 
-const STATUSES = ['작성중', '심의중', '완료'];
+// 서버에는 영문 코드로 저장되고, 화면에는 한글로 보여 준다
+const STATUSES = [
+  ['DRAFT', '작성중'], ['REVIEW', '심의중'], ['APPROVED', '승인'],
+  ['PURCHASE', '구매중'], ['RECEIVED', '입고완료'], ['REJECTED', '반려'],
+];
+const STATUS_LABEL = Object.fromEntries(STATUSES);
 const STATUS_STYLE = {
-  작성중: 'bg-slate-100 text-slate-600 border-slate-200',
-  심의중: 'bg-blue-50 text-blue-700 border-blue-200',
-  완료: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  DRAFT: 'bg-slate-100 text-slate-600 border-slate-200',
+  REVIEW: 'bg-blue-50 text-blue-700 border-blue-200',
+  APPROVED: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  PURCHASE: 'bg-amber-50 text-amber-700 border-amber-200',
+  RECEIVED: 'bg-violet-50 text-violet-700 border-violet-200',
+  REJECTED: 'bg-red-50 text-red-600 border-red-200',
 };
 const EMPTY_FORM = { title: '', line: '', product: '', year: String(new Date().getFullYear()), file: null };
 const CIS_OK = /^Q4\w{2}-\w+$/;
@@ -108,7 +116,7 @@ function Cases({ showToast, askDelete }) {
                 className={`w-full text-left px-4 py-3 border-b border-slate-50 hover:bg-violet-50 ${selectedId === c.id ? 'bg-violet-50 border-l-4 border-l-violet-500' : ''}`}>
                 <div className="flex justify-between items-center gap-2">
                   <span className="font-bold text-slate-800 truncate">{c.title}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold shrink-0 ${STATUS_STYLE[c.status]}`}>{c.status}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold shrink-0 ${STATUS_STYLE[c.status]}`}>{STATUS_LABEL[c.status] || c.status}</span>
                 </div>
                 <div className="text-xs text-slate-500 mt-1 flex justify-between">
                   <span className="truncate">{[c.year, c.line, c.product].filter(Boolean).join(' · ') || '-'}</span>
@@ -264,7 +272,7 @@ function CaseDetail({ c, hasTemplate, showToast, onChanged, onDelete }) {
           {!edit && (
             <div className="flex items-center gap-2 shrink-0">
               <select value={c.status} onChange={e => setStatus(e.target.value)} className={`text-sm border rounded-lg px-2 py-1.5 font-bold ${STATUS_STYLE[c.status]}`}>
-                {STATUSES.map(s => <option key={s}>{s}</option>)}
+                {STATUSES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
               </select>
               <button onClick={() => setEdit({ title: c.title, line: c.line, product: c.product, year: c.year, note: c.note })} className={btnGhost}><Pencil size={14} /> 수정</button>
               <button onClick={onDelete} className={`${btn} bg-white border-red-200 text-red-600 hover:bg-red-50`}><Trash2 size={14} /></button>

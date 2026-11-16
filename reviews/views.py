@@ -10,6 +10,10 @@ from .services import active_template, attach_source, check_upload, generate, im
 
 CASE_FIELDS = ('title', 'line', 'product', 'year', 'status', 'note')
 STATUSES = [s for s, _ in ReviewCase.STATUS_CHOICES]
+STATUS_LABELS = dict(ReviewCase.STATUS_CHOICES)
+# 한글 이름으로 보내도 받아 준다 (예전 화면·스크립트 호환)
+STATUS_ALIASES = {label: code for code, label in ReviewCase.STATUS_CHOICES}
+STATUS_ALIASES['완료'] = 'APPROVED'
 
 
 def _dt(v):
@@ -31,6 +35,7 @@ def case_dict(c, outputs=False):
         'id': c.id, 'source_name': c.source_name, 'has_source': bool(c.source_excel),
         'source_uploaded_at': _dt(c.source_uploaded_at), 'created_at': _dt(c.created_at),
         'updated_at': _dt(c.updated_at), 'created_by': c.created_by.username if c.created_by else '',
+        'status_label': STATUS_LABELS.get(c.status, c.status),
     })
     if outputs:
         d['outputs'] = [output_dict(o) for o in c.outputs.select_related('created_by')[:20]]
@@ -45,9 +50,11 @@ def clean_case(data, partial=False):
         if f in data or not partial:
             out[f] = str(data.get(f) or '').strip()
     if 'status' in out:
-        out['status'] = out['status'] or '작성중'
-        if out['status'] not in STATUSES:
-            raise ValidationError(f"상태는 {', '.join(STATUSES)} 중 하나여야 합니다.")
+        status = out['status'] or 'DRAFT'
+        status = STATUS_ALIASES.get(status, status.upper())
+        if status not in STATUSES:
+            raise ValidationError(f"상태는 {', '.join(STATUS_LABELS.values())} 중 하나여야 합니다.")
+        out['status'] = status
     if 'year' in out and out['year'] and not (out['year'].isdigit() and len(out['year']) == 4):
         raise ValidationError('심의 연도는 4자리 숫자로 입력해 주세요. (예: 2026)')
     return out
