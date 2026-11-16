@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'import_export',
     'simple_history',
+    'reviews',
 ]
 
 MIDDLEWARE = [
@@ -140,3 +141,11 @@ CORS_ALLOW_CREDENTIALS = True
 # Django 관리자 화면 우측 상단 '사이트 보기' 링크
 FRONTEND_URL = os.environ.get('FRONTEND_URL', '/')
 
+
+# 업로드 파일 (심의자료 엑셀·PPT 템플릿·산출물). 공개 URL로 열지 않고 로그인한 API로만 내려받는다.
+# 서버를 옮기거나 백업할 때 db.sqlite3와 함께 이 폴더도 챙겨야 한다.
+MEDIA_ROOT = Path(os.environ.get('DJANGO_MEDIA_ROOT', BASE_DIR / 'media'))
+MEDIA_URL = '/media/'
+
+# 화면에서 템플릿을 올리지 않았을 때 쓸 투자심의 PPT 템플릿 경로 (선택)
+REVIEW_PPT_TEMPLATE = os.environ.get('REVIEW_PPT_TEMPLATE', '')

@@ -133,3 +133,22 @@ export DJANGO_SECRET_KEY=임의-긴-문자열
 systemctl daemon-reload
 systemctl enable --now itam
 ```
+
+## 투자심의 자료 (ADB-Doc)
+
+왼쪽 메뉴 **Docs → 투자심의 자료**에서 심의 PPT와 배포용 엑셀을 만듭니다. PC용 `InvestPPT.exe`(make_ppt.py)와 같은 엔진(`reviews/engine/make_ppt.py`)을 서버에서 돌리므로, 각자 PC에 exe를 깔 필요가 없습니다.
+
+1. **PPT 템플릿 올리기** (처음 한 번): 심의건 화면 위쪽 'PPT 템플릿'에서 `.pptx`를 올립니다.
+2. **새 심의건**: 구매 사양 엑셀(.xlsm/.xlsx)을 올리면 업무명을 엑셀에서 읽어 옵니다.
+3. **PPT 만들기**: PPT와 배포용 엑셀(매크로 제거)이 만들어지고, 만든 기록이 남습니다.
+
+**기준정보 (이름 관리자)** 탭: 심의 매크로 엑셀의 이름 관리자 내용(품목 CIS 코드, 선택 목록, CPU 사양)을 DB로 가져옵니다. 화면에서 매크로 엑셀을 올리거나 명령어로 가져올 수 있습니다.
+
+```bash
+python manage.py import_review_master 26년라인명_제품_투자심의_매크로_V3.xlsm --dry-run   # 바뀔 내용만 확인
+python manage.py import_review_master 26년라인명_제품_투자심의_매크로_V3.xlsm
+```
+
+- 올린 파일과 만든 파일은 `media/` 폴더(환경변수 `DJANGO_MEDIA_ROOT`로 바꿀 수 있음)에 저장됩니다. **백업할 때 `db.sqlite3`와 함께 `media/` 폴더도 챙겨 주세요.**
+- PC용 make_ppt.py를 고치면 `reviews/engine/make_ppt.py`도 같은 파일로 바꿔 주세요.
+- 회사 보안(DRM)이 걸린 엑셀은 서버에서 열 수 없으니 해제 후 올려야 합니다.
