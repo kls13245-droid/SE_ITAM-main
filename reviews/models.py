@@ -73,6 +73,9 @@ class ReviewCase(models.Model):
     product = models.CharField(max_length=100, blank=True, verbose_name="제품")
     year = models.CharField(max_length=4, blank=True, verbose_name="심의 연도")
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='DRAFT', verbose_name="상태")
+    # 구매 사양을 어디서 읽어 PPT를 만들지: 화면에서 입력한 표(FORM) 또는 올린 엑셀(EXCEL)
+    INPUT_CHOICES = [('FORM', '화면 입력'), ('EXCEL', '엑셀 올리기')]
+    input_mode = models.CharField(max_length=5, choices=INPUT_CHOICES, default='FORM', verbose_name="구매 사양 입력 방식")
     note = models.TextField(blank=True, verbose_name="메모")
     source_excel = models.FileField(upload_to='reviews/source/', blank=True, verbose_name="구매 사양 엑셀")
     source_name = models.CharField(max_length=255, blank=True, verbose_name="올린 엑셀 파일 이름")
@@ -89,6 +92,40 @@ class ReviewCase(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class SpecItem(models.Model):
+    """화면에서 입력한 구매 사양 한 줄 (엑셀 '구매 사양' 시트의 장비·라이선스 한 행)
+
+    공통 칸(유형·장비명·제조사·모델·수량)은 열로 두고, 구역마다 다른 칸은 data(JSON)에 둔다.
+      서버    : os, cpu, cpu_qty, mem, mem_qty, disk1_type, disk1, disk1_qty, disk2_type, disk2, disk2_qty,
+                hba, hba_qty, nic, nic_qty, gpu, gpu_qty
+                + SW-수량산정: vm_win, vm_linux, core, sw {제품 키: 수량 (직접 입력하는 제품)}
+      스토리지: disks [{type, size, count, ratio}]
+      ETC·NW  : spec
+      License : version, edition, basis (SW-수량산정 제품 키. 비우면 수량 직접 입력)
+    """
+    BLOCK_CHOICES = [('server', '서버'), ('storage', '스토리지'), ('etc', 'ETC'), ('nw', 'NW'), ('license', 'License')]
+
+    case = models.ForeignKey(ReviewCase, on_delete=models.CASCADE, related_name='spec_items', verbose_name="심의건")
+    block = models.CharField(max_length=10, choices=BLOCK_CHOICES, verbose_name="구역")
+    order = models.PositiveIntegerField(default=0, verbose_name="순서")
+    kind = models.CharField(max_length=50, blank=True, verbose_name="유형")
+    name = models.CharField(max_length=100, blank=True, verbose_name="장비명")
+    usage = models.CharField(max_length=100, blank=True, verbose_name="용도 (비우면 자동)")
+    maker = models.CharField(max_length=50, blank=True, verbose_name="제조사")
+    model = models.CharField(max_length=100, blank=True, verbose_name="모델")
+    qty = models.FloatField(null=True, blank=True, verbose_name="수량")
+    note = models.CharField(max_length=255, blank=True, verbose_name="비고")
+    data = models.JSONField(default=dict, blank=True, verbose_name="구역별 사양")
+    history = HistoricalRecords()
+
+    class Meta:
+        ordering = ['case', 'order', 'id']
+        verbose_name = verbose_name_plural = "구매 사양 줄"
+
+    def __str__(self):
+        return f"{self.get_block_display()} {self.name or self.model}"
 
 
 class ReviewOutput(models.Model):

@@ -10,7 +10,9 @@ from django.test import Client, TestCase, override_settings
 from openpyxl.workbook.defined_name import DefinedName
 from pptx import Presentation
 
-from .models import CpuSpec, MasterList, PartCode, ReviewCase, ReviewOutput
+from . import spec
+from .engine import make_ppt
+from .models import CpuSpec, MasterList, PartCode, ReviewCase, ReviewOutput, SpecItem
 
 XLSM = 'application/vnd.ms-excel.sheet.macroEnabled.12'
 
@@ -174,3 +176,206 @@ class ReviewCaseTest(ReviewBase):
         self.assertEqual(r.status_code, 200)
         self.assertFalse(ReviewCase.objects.exists())
         self.assertFalse(ReviewOutput.objects.exists())
+
+
+# ---------------------------------------------------------------------------
+# 화면에서 입력하는 구매 사양
+# ---------------------------------------------------------------------------
+
+
+def server(name, os_name='Windows 2025', cpu='Xeon Gold 5515', **data):
+    d = {'os': os_name, 'cpu': cpu, 'cpu_qty': 2, 'mem': 'DDR5 32', 'mem_qty': 4,
+         'disk1_type': 'NVMe', 'disk1': 3.2, 'disk1_unit': 'TB', 'disk1_qty': 2, 'nic': '10G 2Port', 'nic_qty': 2}
+    d.update(data)
+    return {'block': 'server', 'name': name, 'maker': 'DELL', 'model': 'R660', 'qty': 1, 'data': d}
+
+
+SAMPLE_ITEMS = [
+    server('DB-A', vm_win=1, core=16),
+    server('VM-HOST', os_name='vSphere 8.0', vm_win=3, vm_linux=2, core=8, sw={'mssql': 1}),
+    {'block': 'storage', 'name': 'ADMS-Unity', 'usage': 'DATA', 'maker': 'DELL', 'model': 'Unity380H', 'qty': 1,
+     'data': {'disks': [{'type': 'SSD', 'size': 800, 'unit': 'GB', 'count': 7, 'ratio': 0.5},
+                        {'type': 'SATA', 'size': 6, 'unit': 'TB', 'count': 12, 'ratio': 0.8}]}},
+    {'block': 'etc', 'kind': 'SAN', 'maker': 'CISCO', 'model': 'MDS9148T', 'qty': 2, 'data': {'spec': 'FC*48'}},
+    {'block': 'nw', 'kind': '10G L2 Switch', 'maker': 'DELL', 'model': 'S4128F ON', 'qty': 1, 'data': {'spec': 'SFP*24'}},
+    {'block': 'license', 'kind': 'OS', 'maker': 'MicroSoft', 'model': 'Windows Server Volume', 'qty': None,
+     'data': {'version': '2025', 'edition': 'Standard', 'basis': 'win_vl'}},
+    {'block': 'license', 'kind': 'HyperVisor', 'maker': 'VMWare', 'model': 'vSphere 구독', 'qty': None,
+     'data': {'version': '8', 'basis': 'vsphere'}},
+    {'block': 'license', 'kind': 'DBMS', 'maker': 'MicroSoft', 'model': 'MSSQL', 'qty': 3, 'data': {'basis': ''}},
+]
+
+
+class SpecCalcTest(TestCase):
+    def setUp(self):
+        self.master = spec.Master({'Xeon Gold 5515': ('3.2', '8')},
+                                  {'code_R660': 'Q430-128953', 'code_UNITY380H': 'Q430-106659', 'code_DL320_Gen12': ''})
+
+    def test_server_and_sw_quantities(self):
+        calc = spec.compute(SAMPLE_ITEMS, self.master)
+        db, vm = calc['rows'][0], calc['rows'][1]
+        self.assertEqual(db['usage'], 'BareMetal')
+        self.assertEqual(vm['usage'], 'Hypervisor')
+        self.assertEqual((db['clock'], db['cores']), ('3.2', '8'))
+        self.assertEqual(db['mem_total'], 128)
+        self.assertEqual(db['disk1_total'], 6.4)
+        self.assertIsNone(db['guest'])
+        self.assertEqual(vm['guest'], 5)
+        # 베어메탈 Windows 1대, 코어 16 → 2Core당 1 = 8, 16Core당 1 = 1
+        self.assertEqual(db['sw']['win_vl'], 8)
+        self.assertEqual(db['sw']['win_dsp'], 1)
+        # VM 호스트: Windows VM 3 → 2개 단위로 올림(2) × 16/2 = 16, 16Core당 = 2, Linux VM 2 → 1, 소켓 2
+        self.assertEqual(vm['sw']['win_vl'], 16)
+        self.assertEqual(vm['sw']['win_dsp'], 2)
+        self.assertEqual(vm['sw']['rhel'], 1)
+        self.assertEqual(vm['sw']['vsphere'], 2)
+        self.assertEqual(calc['sw_total']['win_vl'], 24)
+        self.assertEqual(calc['sw_total']['mssql'], 1)
+        lic = calc['rows'][5:]
+        self.assertEqual([r['qty'] for r in lic], [24, 2, 3])
+        self.assertEqual(lic[0]['unit'], '2Core당 1 Copy')
+        self.assertEqual(lic[1]['license'], 'subscription')
+        self.assertEqual(calc['rows'][3]['name'], 'SAN스위치')
+        self.assertEqual(calc['rows'][4]['usage'], '10G Private용 스위치')
+
+    def test_cis_codes_follow_excel_rules(self):
+        calc = spec.compute(SAMPLE_ITEMS, self.master)
+        self.assertEqual(calc['rows'][0]['codes']['svr'], 'Q430-128953')
+        self.assertEqual(calc['rows'][0]['codes']['ram'], '확인필요')        # 이름 없음
+        self.assertEqual(calc['rows'][2]['codes']['sto'], 'Q430-106659')     # 대소문자 무시
+        empty = spec.compute([dict(server('X'), model='DL320 Gen12')], self.master)
+        self.assertEqual(empty['rows'][0]['codes']['svr'], '')               # 이름은 있고 코드가 빈칸
+
+    def test_workbook_is_readable_by_ppt_engine(self):
+        wb = spec.build_workbook('DMS25', SAMPLE_ITEMS, self.master)
+        buf = io.BytesIO()
+        wb.save(buf)
+        wb = openpyxl.load_workbook(io.BytesIO(buf.getvalue()), data_only=True)
+        sh, cpu = make_ppt.Sheet(wb['구매 사양']), make_ppt.CpuDB(wb)
+        self.assertEqual(make_ppt.task_name(sh), 'DMS25')
+        hw = [r['cells'] for b in make_ppt.build_HW(sh, cpu)[0] for r in b]
+        self.assertEqual(hw[0][3], 'DB-A')
+        self.assertEqual(hw[0][4], '3.2GHz 8core * 2, DDR5 32 * 4, NVMe 3.2TB * 2, 10G 2Port * 2')
+        self.assertEqual(hw[2][4], '800GB * 7, Usable 2000GB\n6TB * 12, Usable 48TB')
+        self.assertEqual([r[2] for r in hw], ['R660', 'R660', 'Unity380H', 'MDS9148T', 'S4128F ON'])
+        sw = [r['cells'] for b in make_ppt.build_SW(sh)[0] for r in b]
+        self.assertEqual([(r[2], r[-1]) for r in sw], [('Windows Server Volume', '24'), ('vSphere 구독', '2'),
+                                                        ('MSSQL', '3')])
+        cost = [r['cells'] for b in make_ppt.build_비용(sh, cpu)[0] for r in b]
+        self.assertIn(['HW', 'DB-A', 'DELL', 'R660 - Mainboard', 'R660', '1', '', '', 'Q430-128953', '', '', ''], cost)
+        self.assertEqual(wb['SW-수량산정']['J7'].value, 24)   # 소계 행 (서버 2줄 아래)
+
+    def test_read_items_round_trip(self):
+        wb = spec.build_workbook('DMS25', SAMPLE_ITEMS, self.master)
+        buf = io.BytesIO()
+        wb.save(buf)
+        data = buf.getvalue()
+        items, warnings = spec.read_items(openpyxl.load_workbook(io.BytesIO(data), data_only=True),
+                                          openpyxl.load_workbook(io.BytesIO(data)))
+        self.assertEqual(warnings, [])
+        self.assertEqual([it['block'] for it in items], [it['block'] for it in SAMPLE_ITEMS])
+        self.assertEqual(items[1]['data']['vm_win'], 3)
+        self.assertEqual(items[1]['data']['sw'], {'mssql': 1})
+        self.assertEqual(items[0]['data']['disk1_unit'], 'TB')
+        self.assertEqual(items[2]['data']['disks'][0], {'type': 'SSD', 'size': 800, 'unit': 'GB', 'count': 7, 'ratio': 0.5})
+        self.assertEqual(items[3]['name'], '')         # 자동 장비명은 비워 둠
+        # 만든 엑셀은 계산값만 있으므로 라이선스 수량 기준은 직접 입력으로 읽힌다
+        self.assertEqual((items[5]['data']['basis'], items[5]['qty']), ('', 24))
+
+    def test_read_items_links_license_to_sw_subtotal(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '구매 사양'
+        ws.append(['업무', '유형', '장비명'])
+        ws.append([])
+        ws.append(['DMS', '서버', 'A'])
+        ws.append(['', '서버 소계'])
+        ws.append(['업무', '유형', '장비명'])
+        ws.append(['License', 'OS', '-', 'OS', 'MicroSoft', 'Windows', "='SW-수량산정'!J6"])
+        ws.append(['', 'HA', '-', 'HA', 'MicroSoft', 'MSSQL', "='SW-수량산정'!K19"])
+        sw = wb.create_sheet('SW-수량산정')
+        for _ in range(4):
+            sw.append([])
+        sw.append(['', 'DMS', '서버', 'A', 1, None, 1, None, 16])
+        sw.append(['', '소계'])
+        items, _ = spec.read_items(wb, wb)
+        self.assertEqual(items[1]['data']['basis'], 'win_vl')
+        self.assertEqual(items[2]['data']['basis'], '')   # 소계가 아닌 칸을 가리키면 직접 입력
+        self.assertEqual(items[0]['data']['vm_win'], 1)
+
+
+class SpecApiTest(ReviewBase):
+    def setUp(self):
+        super().setUp()
+        self.upload('/api/reviews/master/import/', make_workbook())
+        self.case_id = self.json('post', '/api/reviews/', {'title': 'DMS25'}).json()['id']
+        self.url = f'/api/reviews/{self.case_id}/items/'
+
+    def test_new_case_uses_form_and_excel_upload_switches(self):
+        self.assertEqual(ReviewCase.objects.get().input_mode, 'FORM')
+        r = self.upload(f'/api/reviews/{self.case_id}/upload/', make_workbook())
+        self.assertEqual(r.json()['input_mode'], 'EXCEL')
+        r = self.json('put', f'/api/reviews/{self.case_id}/', {'input_mode': 'FORM'})
+        self.assertEqual(r.json()['input_mode'], 'FORM')
+        r = self.json('put', f'/api/reviews/{self.case_id}/', {'input_mode': 'XX'})
+        self.assertEqual(r.status_code, 400)
+
+    def test_save_calc_and_update_keeps_ids(self):
+        r = self.json('put', self.url, {'items': SAMPLE_ITEMS})
+        self.assertEqual(r.status_code, 200, r.content)
+        items = r.json()['items']
+        self.assertEqual(len(items), len(SAMPLE_ITEMS))
+        self.assertEqual(r.json()['calc']['rows'][0]['clock'], '3.2')
+        self.assertEqual(r.json()['case']['item_count'], len(SAMPLE_ITEMS))
+        # 첫 줄 수량만 바꾸고 마지막 줄을 지우면, 나머지 줄은 같은 id로 남는다
+        items[0]['qty'] = 2
+        r = self.json('put', self.url, {'items': items[:-1]})
+        after = r.json()['items']
+        self.assertEqual([i['id'] for i in after], [i['id'] for i in items[:-1]])
+        self.assertEqual(after[0]['qty'], 2)
+        self.assertEqual(SpecItem.objects.count(), len(SAMPLE_ITEMS) - 1)
+        g = self.c.get(self.url).json()
+        self.assertEqual(len(g['sw_products']), 11)
+        self.assertIn('SAN', g['kinds']['etc'])
+
+    def test_rejects_bad_rows(self):
+        r = self.json('put', self.url, {'items': [{'block': 'xx'}]})
+        self.assertEqual(r.status_code, 400)
+        r = self.json('put', self.url, {'items': [dict(server('A'), qty='한 대')]})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('숫자', r.json()['error'])
+
+    def test_calc_without_saving(self):
+        r = self.json('post', f'{self.url}calc/', {'items': SAMPLE_ITEMS})
+        self.assertEqual(r.json()['calc']['sw_total']['vsphere'], 2)
+        self.assertFalse(SpecItem.objects.exists())
+
+    def test_import_from_uploaded_excel(self):
+        src = spec.build_workbook('DMS25', SAMPLE_ITEMS, spec.Master())
+        buf = io.BytesIO()
+        src.save(buf)
+        r = self.upload(f'{self.url}import/', buf.getvalue(), name='spec.xlsx')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(len(r.json()['items']), len(SAMPLE_ITEMS))
+        self.assertEqual(r.json()['case']['input_mode'], 'FORM')
+        # 올려 둔 엑셀이 없으면 파일 없이 불러오기는 안 된다
+        r = self.c.post(f'{self.url}import/', HTTP_X_CSRFTOKEN=self.token)
+        self.assertEqual(r.status_code, 400)
+
+    def test_generate_from_form_and_download_excel(self):
+        tpl = SimpleUploadedFile('template.pptx', blank_template())
+        self.c.post('/api/reviews/template/', {'file': tpl}, HTTP_X_CSRFTOKEN=self.token)
+        r = self.c.post(f'/api/reviews/{self.case_id}/generate/', HTTP_X_CSRFTOKEN=self.token)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('구매 사양', r.json()['error'])
+        self.json('put', self.url, {'items': SAMPLE_ITEMS})
+        r = self.c.post(f'/api/reviews/{self.case_id}/generate/', HTTP_X_CSRFTOKEN=self.token)
+        self.assertEqual(r.status_code, 200, r.content)
+        out = r.json()['output']
+        self.assertIn('[입력] 화면에서 입력한 구매 사양', out['log'])
+        self.assertTrue(out['xlsx_name'].endswith('.xlsx'))
+        dl = self.c.get(f'{self.url}excel/')
+        self.assertEqual(dl.status_code, 200)
+        wb = openpyxl.load_workbook(io.BytesIO(dl.content))
+        self.assertEqual(wb.sheetnames, ['구매 사양', 'SW-수량산정', 'CPU 호환 모델'])
+        self.assertEqual(wb['구매 사양']['C3'].value, 'DB-A')

@@ -4,10 +4,12 @@ import {
   AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Loader2, X, Pencil,
 } from 'lucide-react';
 import { apiJson, jsonBody, API_BASE_URL } from '../api/client';
+import SpecEditor from './SpecEditor';
 
 /*
  * 투자심의 자료 (ADB-Doc)
- *  - 심의건: 구매 사양 엑셀을 올리고 'PPT 만들기'를 누르면 서버가 PPT와 배포용 엑셀을 만든다 (PC용 InvestPPT.exe와 같은 엔진)
+ *  - 심의건: 구매 사양을 화면에서 입력하거나(SpecEditor) 엑셀을 올리고 'PPT·엑셀 만들기'를 누르면
+ *    서버가 PPT와 배포용 엑셀을 만든다 (PC용 InvestPPT.exe와 같은 엔진)
  *  - 기준정보: 심의 매크로 엑셀의 '이름 관리자' 내용 (품목 CIS 코드, 선택 목록, CPU 사양)
  */
 
@@ -110,7 +112,7 @@ function Cases({ showToast, askDelete }) {
         </div>
         <div className="overflow-y-auto flex-1">
           {loading ? <div className="p-6 text-center text-sm text-slate-400">불러오는 중...</div>
-            : filtered.length === 0 ? <div className="p-6 text-center text-sm text-slate-400">등록된 심의건이 없습니다.<br />'새 심의건'에서 구매 사양 엑셀을 올려 시작하세요.</div>
+            : filtered.length === 0 ? <div className="p-6 text-center text-sm text-slate-400">등록된 심의건이 없습니다.<br />'새 심의건'을 눌러 시작하세요.</div>
             : filtered.map(c => (
               <button key={c.id} onClick={() => select(c.id)}
                 className={`w-full text-left px-4 py-3 border-b border-slate-50 hover:bg-violet-50 ${selectedId === c.id ? 'bg-violet-50 border-l-4 border-l-violet-500' : ''}`}>
@@ -192,12 +194,12 @@ function CreateCase({ onCreated, onCancel, showToast }) {
         <button type="button" onClick={onCancel} className="text-slate-400 hover:text-slate-700"><X size={18} /></button>
       </div>
       <div className="p-4 rounded-xl bg-violet-50 border border-violet-100">
-        <div className="text-sm font-bold text-violet-800 mb-2">1. 구매 사양 엑셀 (.xlsm / .xlsx)</div>
+        <div className="text-sm font-bold text-violet-800 mb-2">구매 사양 엑셀 (.xlsm / .xlsx, 선택)</div>
         <div className="flex items-center gap-3">
           <FileButton accept=".xlsm,.xlsx" onPick={(f) => setForm(s => ({ ...s, file: f }))} className={btnGhost}><Upload size={14} /> 파일 고르기</FileButton>
           <span className="text-sm text-slate-600 truncate">{form.file?.name || '선택한 파일 없음'}</span>
         </div>
-        <p className="text-xs text-violet-700/80 mt-2">업무명을 비워 두면 엑셀의 '구매 사양' 시트에서 읽어 옵니다. 엑셀은 나중에 올려도 됩니다.</p>
+        <p className="text-xs text-violet-700/80 mt-2">엑셀 없이 만들면 심의건 화면에서 구매 사양을 직접 입력합니다. 엑셀을 고르면 업무명을 비워 둬도 엑셀의 '구매 사양' 시트에서 읽어 옵니다.</p>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <label className="text-sm text-slate-600 md:col-span-2">업무명<input className={input} value={form.title} onChange={set('title')} placeholder="비우면 엑셀에서 자동으로" /></label>
@@ -219,6 +221,8 @@ function CaseDetail({ c, hasTemplate, showToast, onChanged, onDelete }) {
   const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState('');
   const [openLog, setOpenLog] = useState(c.outputs?.[0]?.id ?? null);
+  const editorRef = useRef(null);
+  const formMode = c.input_mode !== 'EXCEL';
 
   const save = () => {
     setBusy('save');
@@ -233,8 +237,14 @@ function CaseDetail({ c, hasTemplate, showToast, onChanged, onDelete }) {
     upload(`/api/reviews/${c.id}/upload/`, f).then(d => { onChanged(d); showToast('구매 사양 엑셀을 올렸습니다.'); })
       .catch(err => showToast(err.message, 'error')).finally(() => setBusy(''));
   };
-  const generate = () => {
+  const setMode = (input_mode) => apiJson(`/api/reviews/${c.id}/`, jsonBody('PUT', { input_mode }))
+    .then(onChanged).catch(err => showToast(err.message, 'error'));
+  const generate = async () => {
     setBusy('generate');
+    // 화면 입력: 저장하지 않은 변경이 있으면 먼저 저장
+    if (formMode && editorRef.current?.isDirty()) {
+      try { await editorRef.current.save(); } catch (err) { showToast(err.message, 'error'); setBusy(''); return; }
+    }
     apiJson(`/api/reviews/${c.id}/generate/`, { method: 'POST' })
       .then(d => {
         onChanged(d.case); setOpenLog(d.output.id);
@@ -282,25 +292,41 @@ function CaseDetail({ c, hasTemplate, showToast, onChanged, onDelete }) {
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-        <div className="text-sm font-bold text-slate-700 mb-3">구매 사양 엑셀</div>
-        <div className="flex flex-wrap items-center gap-3">
-          <FileSpreadsheet size={20} className={c.has_source ? 'text-emerald-600' : 'text-slate-300'} />
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-slate-800 truncate">{c.source_name || '아직 올리지 않았습니다.'}</div>
-            {c.source_uploaded_at && <div className="text-xs text-slate-400">{fmtDateTime(c.source_uploaded_at)}</div>}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div className="text-sm font-bold text-slate-700">구매 사양</div>
+          <div className="flex bg-slate-100 rounded-lg p-1">
+            {[['FORM', '화면에서 입력'], ['EXCEL', '엑셀 올리기']].map(([k, label]) => (
+              <button key={k} onClick={() => k !== c.input_mode && setMode(k)}
+                className={`px-3 py-1 rounded-md text-xs font-bold ${c.input_mode === k ? 'bg-white text-violet-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{label}</button>
+            ))}
           </div>
-          {c.has_source && <a href={`${API_BASE_URL}/api/reviews/${c.id}/source/`} className={btnGhost}><Download size={14} /> 내려받기</a>}
-          <FileButton accept=".xlsm,.xlsx" onPick={uploadExcel} disabled={!!busy} className={btnGhost}>
-            {busy === 'upload' ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {c.has_source ? '다시 올리기' : '올리기'}
-          </FileButton>
         </div>
+        {formMode ? (
+          <SpecEditor ref={editorRef} c={c} showToast={showToast} onCaseChanged={onChanged} />
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <FileSpreadsheet size={20} className={c.has_source ? 'text-emerald-600' : 'text-slate-300'} />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-slate-800 truncate">{c.source_name || '아직 올리지 않았습니다.'}</div>
+              {c.source_uploaded_at && <div className="text-xs text-slate-400">{fmtDateTime(c.source_uploaded_at)}</div>}
+            </div>
+            {c.has_source && <a href={`${API_BASE_URL}/api/reviews/${c.id}/source/`} className={btnGhost}><Download size={14} /> 내려받기</a>}
+            <FileButton accept=".xlsm,.xlsx" onPick={uploadExcel} disabled={!!busy} className={btnGhost}>
+              {busy === 'upload' ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {c.has_source ? '다시 올리기' : '올리기'}
+            </FileButton>
+          </div>
+        )}
         <div className="mt-5 pt-5 border-t border-slate-100 flex items-center justify-between gap-3">
           <p className="text-xs text-slate-500">
-            {!c.has_source ? '구매 사양 엑셀을 먼저 올려 주세요.' : !hasTemplate ? '위에서 PPT 템플릿을 먼저 올려 주세요.' : 'PC용 InvestPPT와 같은 방식으로 PPT와 배포용 엑셀(매크로 제거)을 만듭니다.'}
+            {formMode
+              ? (!c.item_count ? '구매 사양을 입력하고 저장해 주세요.' : !hasTemplate ? '위에서 PPT 템플릿을 먼저 올려 주세요.'
+                : '화면에서 입력한 구매 사양으로 PPT와 배포용 엑셀을 만듭니다. 저장하지 않은 변경은 먼저 저장합니다.')
+              : (!c.has_source ? '구매 사양 엑셀을 먼저 올려 주세요.' : !hasTemplate ? '위에서 PPT 템플릿을 먼저 올려 주세요.'
+                : 'PC용 InvestPPT와 같은 방식으로 PPT와 배포용 엑셀(매크로 제거)을 만듭니다.')}
           </p>
-          <button onClick={generate} disabled={!!busy || !c.has_source || !hasTemplate}
+          <button onClick={generate} disabled={!!busy || !hasTemplate || (formMode ? false : !c.has_source)}
             className={`${btn} px-5 py-2.5 bg-violet-600 border-violet-600 text-white hover:bg-violet-700 text-base font-bold shrink-0`}>
-            {busy === 'generate' ? <Loader2 size={18} className="animate-spin" /> : <Presentation size={18} />} PPT 만들기
+            {busy === 'generate' ? <Loader2 size={18} className="animate-spin" /> : <Presentation size={18} />} PPT·엑셀 만들기
           </button>
         </div>
       </div>
