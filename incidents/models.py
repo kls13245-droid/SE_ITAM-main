@@ -54,10 +54,16 @@ class IncidentLog(models.Model):
 
 
 class ReportBaseline(models.Model):
-    """ITAM을 쓰기 전에 이미 끝난 건수. 주간보고 표의 총 건수·완료에 더한다."""
+    """건수 표 보정값. ITAM 건으로 센 숫자에 더한다 (ITAM을 쓰기 전 건, 표를 직접 고친 차이).
+
+    표에서 숫자를 직접 고치면 '고친 값 - ITAM 건으로 센 값'이 여기 저장된다.
+    그래서 나중에 건이 추가·완료되어도 표가 그만큼 따라 움직인다.
+    """
     year = models.PositiveIntegerField(verbose_name="연도")
     kind = models.CharField(max_length=10, choices=Incident.KIND_CHOICES, verbose_name="유형")
-    done_before = models.PositiveIntegerField(default=0, verbose_name="ITAM 이전 완료 건수")
+    done_before = models.IntegerField(default=0, verbose_name="완료 보정 (ITAM 이전 완료 건수 등)")
+    adj_in_progress = models.IntegerField(default=0, verbose_name="진행 중 보정")
+    adj_waiting = models.IntegerField(default=0, verbose_name="보류 및 대기 보정")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="수정 시각")
 
     class Meta:

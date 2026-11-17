@@ -103,3 +103,19 @@ class IncidentApiTest(TestCase):
         row = next(x for x in r.json()['counts'] if x['kind'] == 'PM')
         self.assertEqual((row['total'], row['done']), (4, 4))
         self.assertEqual(self.j('put', '/api/incidents/baseline/', {'year': 2026, 'values': {'PM': -1}}).status_code, 400)
+
+    def test_edit_count_table(self):
+        self.make()                                   # 장애 진행 중 1
+        self.make(title='b', status='WAIT')           # 장애 대기 1
+        r = self.j('put', '/api/incidents/baseline/', {'year': 2026, 'values': {
+            'FAULT': {'in_progress': 0, 'done': 28, 'waiting': 6}}})
+        self.assertEqual(r.status_code, 200, r.content)
+        row = next(x for x in r.json()['counts'] if x['kind'] == 'FAULT')
+        self.assertEqual((row['total'], row['in_progress'], row['done'], row['waiting']), (34, 0, 28, 6))
+        self.assertEqual(row['adjust'], {'in_progress': -1, 'done': 28, 'waiting': 5})
+        # 그 뒤 건이 늘면 표도 따라 움직인다
+        self.make(title='c', status='HOLD')
+        row = next(x for x in report.counts(2026) if x['kind'] == 'FAULT')
+        self.assertEqual((row['total'], row['waiting']), (35, 7))
+        bad = self.j('put', '/api/incidents/baseline/', {'year': 2026, 'values': {'FAULT': {'in_progress': -1}}})
+        self.assertEqual(bad.status_code, 400)
