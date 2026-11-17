@@ -38,6 +38,7 @@ const etcGroup = (kind) => (/SAN/i.test(kind) ? '스위치' : /Rack/i.test(kind)
 const nwMakerLists = (kind) => (/25G/i.test(kind) ? ['제조사_25G스위치'] : /(^|[^0-9])1G/i.test(kind) ? ['제조사_1G스위치']
   : ['제조사_10G스위치', '제조사_25G스위치', '제조사_1G스위치']);
 const ADD = '__add__';
+const AUTOSAVE_MS = 1500; // 입력이 이만큼 멈추면 자동 저장
 // 이름 관리자 이름은 대소문자를 가리지 않는다 (예: 제조사_HyperVisor = 제조사_Hypervisor)
 const findList = (lists, name) => {
   if (lists[name]) return name;
@@ -154,6 +155,15 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
   const [addReq, setAddReq] = useState(null); // { name, on }
   const calcTimer = useRef(null);
   const fileRef = useRef(null);
+  // 자동 저장: 바꿀 때마다 version +1, 저장이 끝나면 그 version을 savedVersion으로 기록
+  const itemsRef = useRef(null);
+  const versionRef = useRef(0);
+  const savedVersionRef = useRef(0);
+  const savingRef = useRef(null);
+  const autoTimer = useRef(null);
+  const mountedRef = useRef(true);
+  const [saveState, setSaveState] = useState({ status: 'idle', at: null, error: '' });
+  useEffect(() => { itemsRef.current = items; }, [items]);
 
   useEffect(() => {
     apiJson(`/api/reviews/${c.id}/items/`).then(d => {
@@ -176,8 +186,11 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
 
   const update = (fn) => setItems(prev => {
     const next = fn(prev);
+    versionRef.current += 1;
     setDirty(true);
     recalc(next);
+    clearTimeout(autoTimer.current);
+    autoTimer.current = setTimeout(() => { persist().catch(() => {}); }, AUTOSAVE_MS);
     return next;
   });
   const setField = (k, field, value) => update(prev => prev.map(it => (it._k === k ? { ...it, [field]: value } : it)));
@@ -213,13 +226,61 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
     return next;
   });
 
-  const save = () => {
-    setBusy('save');
-    return apiJson(`/api/reviews/${c.id}/items/`, jsonBody('PUT', { items: strip(items) }))
-      .then(d => { setItems(withKeys(d.items)); setCalc(d.calc); setDirty(false); onCaseChanged(d.case); return d; })
-      .finally(() => setBusy(''));
+  // 지금 화면 내용을 저장한다. 저장 중이면 끝난 뒤 이어서 저장 (같은 줄이 두 번 만들어지지 않게)
+  const persist = () => {
+    if (savingRef.current) return savingRef.current.then(() => persist());
+    const snapshot = itemsRef.current, ver = versionRef.current;
+    if (!snapshot || ver === savedVersionRef.current) return Promise.resolve(null);
+    if (mountedRef.current) setSaveState(s => ({ ...s, status: 'saving' }));
+    const p = apiJson(`/api/reviews/${c.id}/items/`, jsonBody('PUT', { items: strip(snapshot) }))
+      .then(d => {
+        savedVersionRef.current = ver;
+        if (!mountedRef.current) return d;
+        // 새 줄에 서버가 준 id를 붙인다. 입력 중인 칸은 그대로 두어 커서가 튀지 않게 함
+        const sameShape = d.items.length === snapshot.length && d.items.every((it, i) => it.block === snapshot[i].block);
+        if (sameShape) {
+          const ids = Object.fromEntries(snapshot.map((it, i) => [it._k, d.items[i].id]));
+          setItems(prev => prev.map(it => (ids[it._k] && it.id !== ids[it._k] ? { ...it, id: ids[it._k] } : it)));
+        } else if (versionRef.current === ver) {
+          setItems(withKeys(d.items));
+        }
+        if (versionRef.current === ver) { setDirty(false); setCalc(d.calc); }
+        setSaveState({ status: 'saved', at: new Date(), error: '' });
+        onCaseChanged(d.case);
+        return d;
+      })
+      .catch(err => {
+        if (mountedRef.current) setSaveState({ status: 'error', at: null, error: err.message });
+        throw err;
+      })
+      .finally(() => { savingRef.current = null; });
+    savingRef.current = p.catch(() => {});
+    return p;
   };
-  useImperativeHandle(ref, () => ({ save, isDirty: () => dirty }));
+  const save = () => {
+    clearTimeout(autoTimer.current);
+    setBusy('save');
+    return persist().finally(() => setBusy(''));
+  };
+  useImperativeHandle(ref, () => ({ save, isDirty: () => versionRef.current !== savedVersionRef.current }));
+
+  // 다른 심의건·메뉴로 나가면(화면이 닫히면) 저장하지 않은 내용을 바로 저장
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(autoTimer.current);
+      if (versionRef.current !== savedVersionRef.current) persist().catch(() => {});
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // 저장 전에 브라우저를 닫거나 새로고침하면 경고
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
 
   const importExcel = (file) => {
     if (items.length && !window.confirm('지금 입력한 구매 사양을 엑셀 내용으로 바꿉니다. 계속할까요?')) return;
@@ -228,6 +289,7 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
     if (file) fd.append('file', file);
     apiJson(`/api/reviews/${c.id}/items/import/`, { method: 'POST', body: fd })
       .then(d => {
+        clearTimeout(autoTimer.current); versionRef.current += 1; savedVersionRef.current = versionRef.current;
         setItems(withKeys(d.items)); setCalc(d.calc); setDirty(false); setWarnings(d.warnings || []); onCaseChanged(d.case);
         showToast(`엑셀에서 ${d.items.length}줄을 불러왔습니다.`);
       })
@@ -266,7 +328,12 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
           disabled={!!busy || !dirty} className={btnPrimary}>
           {busy === 'save' ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} 저장
         </button>
-        {dirty && <span className="text-xs text-amber-600 font-medium">저장하지 않은 변경이 있습니다.</span>}
+        <span className="text-xs">
+          {saveState.status === 'saving' ? <span className="text-slate-500">저장 중...</span>
+            : saveState.status === 'error' && dirty ? <span className="text-red-600 font-medium">자동 저장 못 함: {saveState.error}</span>
+            : dirty ? <span className="text-amber-600 font-medium">입력을 멈추면 자동으로 저장합니다.</span>
+            : saveState.at ? <span className="text-slate-400">저장됨 {saveState.at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</span> : null}
+        </span>
         <div className="ml-auto flex flex-wrap gap-2">
           <input ref={fileRef} type="file" accept=".xlsm,.xlsx" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importExcel(f); }} />
