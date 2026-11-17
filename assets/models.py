@@ -117,3 +117,18 @@ class PMRecord(models.Model):
 
     def __str__(self):
         return f"{self.asset.hostname} {self.pm_date} {self.pm_status}"
+
+
+class UserSetting(models.Model):
+    """사용자별 화면 설정 (예: 사이드바 메뉴 배치). key 하나에 JSON 값 하나."""
+    user = models.ForeignKey('auth.User', on_delete=models.CASCADE, related_name='itam_settings', verbose_name="사용자")
+    key = models.CharField(max_length=50, verbose_name="항목")
+    value = models.JSONField(default=dict, blank=True, verbose_name="값")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="수정 시각")
+
+    class Meta:
+        unique_together = [('user', 'key')]
+        verbose_name = verbose_name_plural = "사용자 화면 설정"
+
+    def __str__(self):
+        return f"{self.user.username} · {self.key}"

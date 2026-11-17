@@ -890,6 +890,7 @@ export default function App() {
         onLogout={handleLogout}
         onRefresh={() => fetchSiteData()}
         activeView={view}
+        showToast={showToast}
         onOpenFieldAssets={() => { setView('field'); setSearchTerm(''); }}
         onOpenReviews={() => { setView('reviews'); setSearchTerm(''); }}
         onOpenIncidents={() => { setView('incidents'); setSearchTerm(''); }}

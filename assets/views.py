@@ -9,7 +9,7 @@ from django.http import HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 
-from .models import Building, Campus, FieldAsset, PMRecord, Rack, ServerAsset
+from .models import Building, Campus, FieldAsset, PMRecord, Rack, ServerAsset, UserSetting
 from .services import (
     ValidationError, clean_field_asset, clean_health, field_template_csv, import_field_assets, parse_csv,
     place_field_assets, rack_link, rack_servers_by_field_asset, refresh_asset_pm, sync_rack_server,
@@ -125,6 +125,44 @@ def api_me(request):
         u = request.user
         return JsonResponse({'authenticated': True, 'username': u.username, 'is_admin': u.is_staff or u.is_superuser})
     return JsonResponse({'authenticated': False}, status=401)
+
+
+SIDEBAR_MAX_GROUPS = 30
+SIDEBAR_MAX_ITEMS = 50
+
+
+def clean_sidebar(value):
+    """사이드바 배치: {'groups': [{'name': '그룹명', 'items': ['field', ...]}, ...]}"""
+    groups = (value or {}).get('groups')
+    if not isinstance(groups, list) or len(groups) > SIDEBAR_MAX_GROUPS:
+        raise ValidationError(f'그룹은 {SIDEBAR_MAX_GROUPS}개까지 만들 수 있습니다.')
+    out, seen = [], set()
+    for g in groups:
+        name = str((g or {}).get('name') or '').strip()[:40]
+        items = []
+        for i in (g or {}).get('items') or []:
+            i = str(i)[:30]
+            if i and i not in seen:
+                seen.add(i)
+                items.append(i)
+        out.append({'name': name, 'items': items})
+    if len(seen) > SIDEBAR_MAX_ITEMS:
+        raise ValidationError('메뉴가 너무 많습니다.')
+    return {'groups': out}
+
+
+@api('GET', 'PUT', 'DELETE')
+def my_sidebar(request):
+    """내 사이드바 메뉴 배치. 저장한 적이 없으면 layout=None (화면이 기본 배치를 씀)"""
+    if request.method == 'PUT':
+        value = clean_sidebar(body(request).get('layout'))
+        UserSetting.objects.update_or_create(user=request.user, key='sidebar', defaults={'value': value})
+        return JsonResponse({'layout': value})
+    if request.method == 'DELETE':
+        UserSetting.objects.filter(user=request.user, key='sidebar').delete()
+        return JsonResponse({'layout': None})
+    s = UserSetting.objects.filter(user=request.user, key='sidebar').first()
+    return JsonResponse({'layout': s.value if s else None})
 
 
 # ---------------------------------------------------------------------------
