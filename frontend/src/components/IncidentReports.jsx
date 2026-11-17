@@ -123,12 +123,12 @@ function IncidentForm({ initial, fieldAssets, onClose, onSaved, showToast }) {
         <label className="text-sm text-slate-600">완료일
           <input type="date" className={input} value={form.done_on || ''} onChange={set('done_on')} disabled={form.status !== 'DONE'} />
         </label>
-        <label className="text-sm text-slate-600 col-span-2">관련 장비 <span className="text-slate-400">(현장 장비 호스트명을 고르면 연결됩니다)</span>
+        <label className="text-sm text-slate-600 col-span-2">관련 장비 <span className="text-slate-400">(서버 현황의 호스트명을 고르면 연결됩니다)</span>
           <input className={input} list="incident-field-assets" value={form.asset_name || ''} onChange={pickAsset} placeholder="호스트명 또는 자유 입력" />
           <datalist id="incident-field-assets">
             {fieldAssets.map((a) => <option key={a.id} value={a.hostname}>{a.site_group}</option>)}
           </datalist>
-          {form.field_asset_id ? <span className="text-xs text-emerald-600">현장 장비와 연결됨</span> : null}
+          {form.field_asset_id ? <span className="text-xs text-emerald-600">서버 현황과 연결됨</span> : null}
         </label>
         {isNew && (
           <label className="text-sm text-slate-600 col-span-2">첫 진행 기록 <span className="text-slate-400">(선택, 발생일 날짜로 들어갑니다)</span>

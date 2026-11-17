@@ -912,7 +912,7 @@ export default function App() {
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10 shrink-0">
           <div className="flex items-center text-sm font-medium text-slate-500 flex-1">
             <span className="cursor-pointer hover:text-blue-600 transition-colors" onClick={goHome}>사이트 현황</span>
-            {view === 'field' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">현장 장비 (PM)</span></>}
+            {view === 'field' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">서버 현황</span></>}
             {view === 'reviews' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">투자심의 자료</span></>}
             {view === 'incidents' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">장애·유지보수 보고</span></>}
             {view === 'topology' && selectedBuilding && (
@@ -924,7 +924,7 @@ export default function App() {
           </div>
           <div className="flex-1 max-w-lg mx-4 relative z-50">
             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"><Search size={16} className={searchTerm ? 'text-blue-500' : 'text-slate-400'} /></div>
-            <input type="text" placeholder="전체 자산 검색 (Hostname, IP, 모델명, S/N) · 랙 + 현장 장비" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-100 border border-slate-200 rounded-full py-2 pl-11 pr-4 text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-inner" />
+            <input type="text" placeholder="전체 자산 검색 (Hostname, IP, 모델명, S/N) · 랙 + 서버 현황" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-slate-100 border border-slate-200 rounded-full py-2 pl-11 pr-4 text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-inner" />
             {searchTerm && (
               <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden max-h-[400px] overflow-y-auto animate-in fade-in">
                 {globalSearchResults.total + fieldSearchResults.total > 0 ? (
@@ -945,7 +945,7 @@ export default function App() {
                     ))}
                     {fieldSearchResults.total > 0 && (
                       <div className="px-4 pt-3 pb-1 text-[10px] font-bold text-orange-500 uppercase flex justify-between">
-                        <span>현장 장비 (PM)</span><span>{fieldSearchResults.total > 10 ? `${fieldSearchResults.total}건 중 10건` : `${fieldSearchResults.total}건`}</span>
+                        <span>서버 현황</span><span>{fieldSearchResults.total > 10 ? `${fieldSearchResults.total}건 중 10건` : `${fieldSearchResults.total}건`}</span>
                       </div>
                     )}
                     {fieldSearchResults.items.map(a => (

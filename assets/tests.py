@@ -504,3 +504,49 @@ class FieldRackSyncTest(AutoPlaceTest):
         f = SimpleUploadedFile('a.csv', csv.encode('utf-8-sig'), content_type='text/csv')
         self.c.post('/api/field-assets/import/', {'file': f}, HTTP_X_CSRFTOKEN=self.token)
         self.assertEqual(ServerAsset.objects.get(hostname='P1D-DBA').status, 'MAINT')
+
+
+class FieldAssetBulkTest(BaseTest):
+    def setUp(self):
+        super().setUp()
+        mk = lambda h, **kw: FieldAsset.objects.create(hostname=h, site_group='P1D DM', status='가동', **kw)
+        self.a = mk('BULK-1', health={'cpu': '정상', 'disk': 'Fault'})
+        self.b = mk('BULK-2', health={'cpu': 'Fault', 'disk': '정상'})
+        self.c3 = mk('BULK-3')
+
+    def test_bulk_pm_record(self):
+        r = self.post('/api/field-assets/bulk/', {'ids': [self.a.id, self.b.id], 'pm': {
+            'pm_date': '2026-11-17', 'pm_status': '완료', 'worker': '홍길동', 'note': '정기 PM',
+            'health': {'cpu': '정상', 'disk': ''}}})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['updated'], 2)
+        for asset, disk in ((self.a, 'Fault'), (self.b, '정상')):
+            asset.refresh_from_db()
+            self.assertEqual(str(asset.pm_date), '2026-11-17')
+            self.assertEqual(asset.health['cpu'], '정상')      # 고른 부품은 바뀌고
+            self.assertEqual(asset.health['disk'], disk)       # 안 고른 부품은 장비마다 그대로
+            self.assertEqual(asset.pm_records.get().worker, '홍길동')
+        self.c3.refresh_from_db()
+        self.assertIsNone(self.c3.pm_date)
+
+    def test_bulk_fields(self):
+        r = self.post('/api/field-assets/bulk/', {'ids': [self.a.id, self.c3.id],
+                                                  'fields': {'status': 'Parts 교체 필요', 'warranty_end': '2027-12-31'}})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.a.refresh_from_db(); self.b.refresh_from_db()
+        self.assertEqual((self.a.status, str(self.a.warranty_end), self.a.locally_modified),
+                         ('Parts 교체 필요', '2027-12-31', True))
+        self.assertEqual(self.b.status, '가동')
+
+    def test_bulk_validation_is_all_or_nothing(self):
+        url = '/api/field-assets/bulk/'
+        self.assertEqual(self.post(url, {'ids': [], 'fields': {'status': '가동'}}).status_code, 400)
+        self.assertEqual(self.post(url, {'ids': [self.a.id]}).status_code, 400)
+        self.assertEqual(self.post(url, {'ids': [self.a.id], 'fields': {'hostname': 'X'}}).status_code, 400)
+        self.assertEqual(self.post(url, {'ids': [self.a.id], 'fields': {'status': '아무거나'}}).status_code, 400)
+        self.assertEqual(self.post(url, {'ids': [self.a.id, 99999], 'fields': {'status': '폐기'}}).status_code, 400)
+        self.assertEqual(self.post(url, {'ids': [self.a.id], 'pm': {'pm_date': ''}}).status_code, 400)
+        self.assertEqual(self.post(url, {'ids': [self.a.id], 'pm': {'pm_date': '2026-11-17', 'health': {'cpu': '몰라'}}}).status_code, 400)
+        self.a.refresh_from_db()
+        self.assertEqual(self.a.status, '가동')
+        self.assertFalse(PMRecord.objects.exists())
