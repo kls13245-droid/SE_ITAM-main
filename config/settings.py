@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'import_export',
     'simple_history',
     'reviews',
+    'incidents',
 ]
 
 MIDDLEWARE = [

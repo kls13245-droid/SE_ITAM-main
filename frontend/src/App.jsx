@@ -15,6 +15,7 @@ import { apiFetch, apiJson, jsonBody, loadCsrfToken, setCsrfToken } from './api/
 import ImportCsvModal from './components/ImportCsvModal';
 import FieldAssets from './components/FieldAssets';
 import ReviewDocs from './components/ReviewDocs';
+import IncidentReports from './components/IncidentReports';
 import DeleteConfirmModal from './components/DeleteConfirmModal';
 import { matchesSearch, primaryIp, matchesFieldSearch, fieldIp } from './utils/server';
 import { STATUS_STYLE as FIELD_STATUS_STYLE } from './components/fieldAssetConstants';
@@ -52,7 +53,7 @@ export default function App() {
 
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [view, setView] = useState('topology'); // 'topology' | 'field' (현장 장비) | 'reviews' (투자심의 자료)
+  const [view, setView] = useState('topology'); // 'topology' | 'field' (현장 장비) | 'reviews' (투자심의 자료) | 'incidents' (장애·유지보수 보고)
   const [fieldAssets, setFieldAssets] = useState([]); // 전체 검색용 현장 장비 목록
   const [fieldFocusId, setFieldFocusId] = useState(null); // 검색에서 고른 현장 장비
   const [currentUser, setCurrentUser] = useState({ username: '', isAdmin: false });
@@ -891,6 +892,7 @@ export default function App() {
         activeView={view}
         onOpenFieldAssets={() => { setView('field'); setSearchTerm(''); }}
         onOpenReviews={() => { setView('reviews'); setSearchTerm(''); }}
+        onOpenIncidents={() => { setView('incidents'); setSearchTerm(''); }}
         onStartAddCampus={() => setIsAddingCampus(true)}
         onSaveCampus={handleSaveCampus}
         onCancelCampus={() => { setIsAddingCampus(false); setNewCampusName(''); }}
@@ -912,6 +914,7 @@ export default function App() {
             <span className="cursor-pointer hover:text-blue-600 transition-colors" onClick={goHome}>사이트 현황</span>
             {view === 'field' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">현장 장비 (PM)</span></>}
             {view === 'reviews' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">투자심의 자료</span></>}
+            {view === 'incidents' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">장애·유지보수 보고</span></>}
             {view === 'topology' && selectedBuilding && (
               <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="cursor-pointer hover:text-blue-600 transition-colors" onClick={() => { setSelectedBuilding(null); setSelectedRack(null); setSelectedServer(null); setIsEditing(false); }}>{selectedBuilding.campusName}</span><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-blue-600 cursor-pointer hover:underline" onClick={() => handleBuildingClick(selectedBuilding, {name: selectedBuilding.campusName})}>{selectedBuilding.name}</span></>
             )}
@@ -973,7 +976,9 @@ export default function App() {
 
         <main className="flex-1 overflow-y-auto bg-slate-50 p-6 flex relative z-0">
           
-          {view === 'reviews' ? (
+          {view === 'incidents' ? (
+            <IncidentReports showToast={showToast} askDelete={askDelete} />
+          ) : view === 'reviews' ? (
             <ReviewDocs showToast={showToast} askDelete={askDelete} />
           ) : view === 'field' ? (
             <FieldAssets showToast={showToast} focusId={fieldFocusId} onFocusHandled={() => setFieldFocusId(null)} askDelete={askDelete}
