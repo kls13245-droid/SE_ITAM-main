@@ -43,6 +43,28 @@ SW_KEYS = [p['key'] for p in SW_PRODUCTS]
 SW_BY_KEY = {p['key']: p for p in SW_PRODUCTS}
 SW_FIRST_COL = 10  # J열
 
+# 라이선스 제품(SW_* 목록 값) → 고를 수 있는 수량 기준(SW-수량산정 제품 키). 제품을 고르면 기준 목록을 이것만 보여 준다
+LICENSE_BASIS = {
+    'Windows Server Volume': ['win_vl'], 'Windows Server DSP': ['win_dsp'],
+    'RedHatLinux 구독': ['rhel'], 'RedHatLinux': ['rhel'],
+    'vSphere 구독': ['vsphere'], 'vSphere': ['vsphere'], 'vCenter': ['vcenter'],
+    'RoseHA SAN': ['roseha_win', 'roseha_linux'], 'RoseHA Mirror': ['rose_mirror'],
+    'Oracle': ['oracle_ee', 'oracle_se'], 'MSSQL': ['mssql'],
+}
+# 서버 OS·SW-수량산정으로 필요한 라이선스 줄 (key, 조건 설명, 줄 기본값)
+_LIC = lambda kind, maker, model, version='', edition='', basis='': {  # noqa: E731
+    'block': 'license', 'kind': kind, 'maker': maker, 'model': model, 'qty': None, 'name': '', 'usage': '', 'note': '',
+    'data': {'version': version, 'edition': edition, 'basis': basis}}
+MANUAL_LICENSE = {
+    'vcenter': _LIC('HyperVisor', 'VMWare', 'vCenter', '8', 'Standard', 'vcenter'),
+    'roseha_win': _LIC('HA', 'RoseDataSystems', 'RoseHA SAN', '9', 'Windows', 'roseha_win'),
+    'rose_mirror': _LIC('HA', 'RoseDataSystems', 'RoseHA Mirror', '6', 'Windows', 'rose_mirror'),
+    'roseha_linux': _LIC('HA', 'RoseDataSystems', 'RoseHA SAN', '10', 'Linux', 'roseha_linux'),
+    'oracle_ee': _LIC('DBMS', 'Oracle', 'Oracle', '19C', 'Enterprise', 'oracle_ee'),
+    'oracle_se': _LIC('DBMS', 'Oracle', 'Oracle', '19C', 'Standard', 'oracle_se'),
+    'mssql': _LIC('DBMS', 'MicroSoft', 'MSSQL', '2022', 'Standard', 'mssql'),
+}
+
 ETC_KINDS = ['SAN', 'Rack', 'PDU', 'KVM']
 NW_KINDS = ['1G L2 Switch', '10G L2 Switch', '25G L3 Switch']
 LICENSE_KINDS = ['OS', 'HyperVisor', 'HA', 'DBMS']
@@ -290,7 +312,72 @@ def compute(items, master=None):
         c['unit'] = SW_BY_KEY[basis]['unit'] if basis in SW_BY_KEY else ''
         sw_name = ' '.join(x for x in (text(it.get('model')), text(d.get('version')), text(d.get('edition'))) if x)
         c['codes'] = {'sw': master.code(_code_key(sw_name, ' .-()')) if sw_name else ''}
-    return {'rows': rows, 'sw_total': sw_total}
+    return {'rows': rows, 'sw_total': sw_total, 'license_needs': license_needs(items, sw_total)}
+
+
+def basis_for(model, edition=''):
+    """제품·에디션에 맞는 수량 기준 (여러 개면 에디션으로 고름, 못 고르면 첫 번째)"""
+    keys = LICENSE_BASIS.get(text(model), [])
+    ed = text(edition).upper()
+    for k in keys:
+        if (ed == 'LINUX' and k.endswith('linux')) or (ed == 'WINDOWS' and k.endswith('win')) \
+                or (ed == 'ENTERPRISE' and k.endswith('_ee')) or (ed == 'STANDARD' and k.endswith('_se')):
+            return k
+    return keys[0] if keys else ''
+
+
+def license_needs(items, sw_total):
+    """서버 OS와 SW-수량산정으로 필요한데 License 표에 아직 없는 라이선스 줄 (화면에서 한 번에 추가)
+
+    Windows는 DSP(16Core당)와 Volume(2Core당) 중 사용자가 고르므로 두 가지를 같이 돌려준다 (choice).
+    """
+    lic = [it for it in items if it['block'] == 'license']
+    have_basis = {(it.get('data') or {}).get('basis') for it in lic}
+    have_model = {text(it.get('model')).upper() for it in lic}
+    servers = [it for it in items if it['block'] == 'server']
+
+    def os_of(it):
+        return text((it.get('data') or {}).get('os'))
+
+    def count(pred):
+        return sum(int(num(it.get('qty')) or 1) for it in servers if pred(os_of(it).upper()))
+
+    def version(prefix):
+        vs = [re.sub(r'^\D*', '', os_of(it)) for it in servers if os_of(it).upper().startswith(prefix)]
+        vs = [v for v in vs if v]
+        return max(set(vs), key=vs.count) if vs else ''
+
+    out = []
+    win = count(lambda o: re.match(r'WINDOWS\s*20\d\d', o) is not None) + sum(
+        num((it.get('data') or {}).get('vm_win')) or 0 for it in servers)
+    if win and not have_basis & {'win_vl', 'win_dsp'} and not have_model & {'WINDOWS SERVER VOLUME', 'WINDOWS SERVER DSP'}:
+        v = version('WINDOWS') or '2025'
+        out.append({'key': 'windows', 'label': f'Windows Server {v}', 'reason': 'Windows 서버·VM이 있음',
+                    'choice': [{'label': 'Volume (국내, 2Core당)', 'row': _LIC('OS', 'MicroSoft', 'Windows Server Volume', v, 'Standard', 'win_vl')},
+                               {'label': 'DSP (해외, 16Core당)', 'row': _LIC('OS', 'MicroSoft', 'Windows Server DSP', v, 'Standard', 'win_dsp')}]})
+    if count(lambda o: o.startswith('RHEL')) and 'rhel' not in have_basis and not have_model & {'REDHATLINUX 구독', 'REDHATLINUX'}:
+        v = version('RHEL')
+        out.append({'key': 'rhel', 'label': f'RedHatLinux 구독 {v}'.strip(), 'reason': 'RHEL 서버가 있음',
+                    'row': _LIC('OS', 'RedHat', 'RedHatLinux 구독', v, '', 'rhel')})
+    if count(lambda o: 'VSPHERE' in o) and 'vsphere' not in have_basis and not have_model & {'VSPHERE 구독', 'VSPHERE'}:
+        v = version('VSPHERE').split('.')[0]
+        out.append({'key': 'vsphere', 'label': f'vSphere 구독 {v}'.strip(), 'reason': 'vSphere 서버가 있음',
+                    'row': _LIC('HyperVisor', 'VMWare', 'vSphere 구독', v, 'Standard', 'vsphere')})
+    for prefix, maker, model in (('UBUNTU', '캐노니컬', 'Ubuntu'), ('CENTOS', 'RedHat', 'CentOS')):
+        n = count(lambda o, p=prefix: o.startswith(p))
+        if n and model.upper() not in have_model:
+            row = _LIC('OS', maker, model, version(prefix))
+            row['qty'] = n
+            out.append({'key': model.lower(), 'label': f'{model} {version(prefix)}'.strip(), 'reason': f'{model} 서버 {n}대',
+                        'row': row})
+    for key, row in MANUAL_LICENSE.items():
+        covered = any(text(it.get('model')).upper() == row['model'].upper()
+                      and text((it.get('data') or {}).get('edition')).upper() in ('', row['data']['edition'].upper())
+                      for it in lic)
+        if (sw_total.get(key) or 0) > 0 and key not in have_basis and not covered:
+            out.append({'key': key, 'label': ' '.join(x for x in (row['model'], row['data']['version'], row['data']['edition']) if x),
+                        'reason': f"SW 수량 산정 {SW_BY_KEY[key]['name']} {clean_num(sw_total[key])}", 'row': row})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +410,15 @@ SUB_HEADERS['nw'] = SUB_HEADERS['etc']
 _thin = Side(style='thin', color='BFBFBF')
 BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 HEAD_FILL = PatternFill('solid', fgColor='DDEBF7')
-SUB_FILL = PatternFill('solid', fgColor='F2F2F2')
-TOTAL_FILL = PatternFill('solid', fgColor='FFF2CC')
-CENTER = Alignment(horizontal='center', vertical='center', wrap_text=True)
+SUB_FILL = HEAD_FILL          # 구역 머리글 (스토리지·ETC·NW·License)도 같은 색 (V3 엑셀과 같음)
+TOTAL_FILL = None             # 소계 행은 색 없이 굵게
+FONT = Font(name='맑은 고딕', size=9)
+FONT_BOLD = Font(name='맑은 고딕', size=9, bold=True)
+CENTER = Alignment(horizontal='center', vertical='center')
+CENTER_WRAP = Alignment(horizontal='center', vertical='center', wrap_text=True)
+LEFT = Alignment(horizontal='left', vertical='center')
+MAX_WIDTH = 45      # 칸 너비 상한 (넘는 글자는 줄바꿈)
+HEADER_CAP = 14     # 머리글 글자는 이 너비까지만 칸을 넓히고 나머지는 줄바꿈
 
 
 def _put(ws, ref, value, unit=None, whole=False):
@@ -342,15 +435,49 @@ def unit_format(value, unit, whole=False):
     return ('0.' + '0' * len(frac) if frac else '0') + f'"{unit}"'
 
 
-def _style_row(ws, r, last_col, fill=None, bold=False):
+def _style_row(ws, r, last_col, fill=None, bold=False, wrap=False):
     for c in range(1, last_col + 1):
         cell = ws.cell(r, c)
         cell.border = BORDER
-        cell.alignment = CENTER
+        cell.alignment = CENTER_WRAP if wrap else CENTER
+        cell.font = FONT_BOLD if bold else FONT
         if fill:
             cell.fill = fill
-        if bold:
-            cell.font = Font(bold=True)
+
+
+def _text_width(v, fmt=''):
+    """엑셀 칸에 보이는 글자 폭 (한글 2, 그 외 1)"""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        s = str(clean_num(v)) + ''.join(re.findall(r'"([^"]*)"', fmt or ''))
+        if '%' in (fmt or ''):
+            s = f'{v * 100:.1f}%'
+    else:
+        s = str(v)
+    return max((sum(2 if ord(ch) > 0x1100 else 1 for ch in line) for line in s.split('\n')), default=0)
+
+
+def _autofit(ws, header_rows, last_col):
+    """내용에 맞게 칸 너비를 정한다. 머리글은 HEADER_CAP까지만 넓히고, 너무 긴 값은 줄바꿈한다"""
+    merged = {}
+    for rng in ws.merged_cells.ranges:
+        if rng.max_col > rng.min_col:
+            for row in range(rng.min_row, rng.max_row + 1):
+                for col in range(rng.min_col, rng.max_col + 1):
+                    merged[(row, col)] = True
+    widths = {}
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=last_col):
+        for cell in row:
+            if cell.value in (None, '') or (cell.row, cell.column) in merged:
+                continue
+            w = _text_width(cell.value, cell.number_format)
+            if cell.row in header_rows:
+                w = min(w, HEADER_CAP)
+            elif w > MAX_WIDTH:
+                cell.alignment = CENTER_WRAP
+                w = MAX_WIDTH
+            widths[cell.column] = max(widths.get(cell.column, 0), w)
+    for c in range(1, last_col + 1):
+        ws.column_dimensions[get_column_letter(c)].width = max(4.5, widths.get(c, 3) * 1.1 + 1.5)
 
 
 def _sorted(items, block):
@@ -374,8 +501,9 @@ def build_workbook(case_title, items, master=None, cpus=None):
             ws.merge_cells(f'{col}1:{col}2')
     for m in HEADER_MERGE:
         ws.merge_cells(m)
-    _style_row(ws, 1, last_col, HEAD_FILL, True)
-    _style_row(ws, 2, last_col, HEAD_FILL, True)
+    _style_row(ws, 1, last_col, HEAD_FILL, True, wrap=True)
+    _style_row(ws, 2, last_col, HEAD_FILL, True, wrap=True)
+    header_rows = {1, 2}
 
     r = 3
     sw_rows = []  # SW-수량산정 시트용 (서버 줄, 계산값)
@@ -384,7 +512,8 @@ def build_workbook(case_title, items, master=None, cpus=None):
         nonlocal r
         for col, v in SUB_HEADERS[block].items():
             ws[f'{col}{r}'] = v
-        _style_row(ws, r, last_col, SUB_FILL, True)
+        _style_row(ws, r, last_col, SUB_FILL, True, wrap=True)
+        header_rows.add(r)
         r += 1
 
     def block_label(first_row, last_row, label):
@@ -440,6 +569,7 @@ def build_workbook(case_title, items, master=None, cpus=None):
     ws.merge_cells(f'B{r}:F{r}')
     ws[f'G{r}'] = clean_num(sum(num(it.get('qty')) or 0 for it in servers))
     _style_row(ws, r, last_col, TOTAL_FILL, True)
+    ws[f'B{r}'].alignment = LEFT
     r += 1
 
     # 스토리지 (디스크 줄마다 한 행, 첫 행에만 장비 정보)
@@ -477,6 +607,7 @@ def build_workbook(case_title, items, master=None, cpus=None):
         ws.merge_cells(f'B{r}:F{r}')
         ws[f'G{r}'] = clean_num(sum(num(it.get('qty')) or 0 for it in storages))
         _style_row(ws, r, last_col, TOTAL_FILL, True)
+        ws[f'B{r}'].alignment = LEFT
         r += 1
 
     # ETC, NW
@@ -513,14 +644,11 @@ def build_workbook(case_title, items, master=None, cpus=None):
             r += 1
         block_label(start, r - 1, 'License')
 
-    widths = {'A': 10, 'B': 12, 'C': 14, 'D': 12, 'E': 11, 'F': 16, 'I': 16, 'J': 16, 'O': 11, 'AE': 18}
-    for c in range(1, last_col + 1):
-        letter = get_column_letter(c)
-        ws.column_dimensions[letter].width = widths.get(letter, 13 if c >= 32 else 8)
+    _autofit(ws, header_rows, last_col)
     ws.freeze_panes = 'C3'
 
     _sw_sheet(wb.create_sheet(SW_SHEET), case_title, sw_rows, calc['sw_total'])
-    _cpu_sheet(wb.create_sheet(CPU_SHEET), cpus if cpus is not None else master.cpus)
+    # 'CPU 호환 모델' 시트는 넣지 않는다 (K·L열에 클럭·코어 값을 넣으므로 PPT 엔진도 필요 없음)
     return wb
 
 
@@ -543,7 +671,7 @@ def _sw_sheet(ws, case_title, rows, totals):
               'J1:L1', 'J2:L2', 'M1:N1', 'M2:N2', 'O1:Q1', 'O2:Q2', 'R1:T1', 'R2:T2'):
         ws.merge_cells(m)
     for r in range(1, 5):
-        _style_row(ws, r, 21, HEAD_FILL, True)
+        _style_row(ws, r, 21, HEAD_FILL, True, wrap=True)
     r = 5
     for it, c in rows:
         d = it.get('data') or {}
@@ -565,17 +693,9 @@ def _sw_sheet(ws, case_title, rows, totals):
     for i, k in enumerate(SW_KEYS):
         ws[f'{get_column_letter(SW_FIRST_COL + i)}{r}'] = totals.get(k) or 0
     _style_row(ws, r, 21, TOTAL_FILL, True)
-    for c in range(1, 22):
-        ws.column_dimensions[get_column_letter(c)].width = 16 if c >= SW_FIRST_COL else 10
-    ws.row_dimensions[3].height = 45
+    _autofit(ws, {1, 2, 3, 4}, 21)
+    ws.row_dimensions[3].height = 48
 
-
-def _cpu_sheet(ws, cpus):
-    ws.append(['CPU', '속도(GHz)', 'core'])
-    _style_row(ws, 1, 3, HEAD_FILL, True)
-    for name, (clock, cores) in sorted(cpus.items()):
-        ws.append([name, num(clock) if num(clock) is not None else clock, num(cores) if num(cores) is not None else cores])
-    ws.column_dimensions['A'].width = 24
 
 
 # ---------------------------------------------------------------------------

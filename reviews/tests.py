@@ -455,7 +455,7 @@ class SpecApiTest(ReviewBase):
         dl = self.c.get(f'{self.url}excel/')
         self.assertEqual(dl.status_code, 200)
         wb = openpyxl.load_workbook(io.BytesIO(dl.content))
-        self.assertEqual(wb.sheetnames, ['구매 사양', 'SW-수량산정', 'CPU 호환 모델'])
+        self.assertEqual(wb.sheetnames, ['구매 사양', 'SW-수량산정'])   # CPU 호환 목록은 내보내지 않음
         self.assertEqual(wb['구매 사양']['C3'].value, 'DB-A')
 
     def test_add_list_value_from_form(self):
@@ -546,3 +546,25 @@ class MasterFixesTest(ReviewBase):
         srv.refresh_from_db(); sto.refresh_from_db()
         self.assertEqual((srv.data['cpu'], srv.data['os'], sto.model), ('Xeon E-2436', 'Ubuntu 16.04', 'FAS2720'))
         self.assertEqual(master_fixes.apply(), [])   # 두 번째 실행은 바뀌는 것 없음
+
+
+class LicenseNeedsTest(TestCase):
+    def test_server_os_suggests_missing_license_rows(self):
+        items = [server('W1'), server('V1', os_name='vSphere 8.0', vm_linux=2, core=8),
+                 server('R1', os_name='RHEL 9.5'), server('U1', os_name='Ubuntu 22.04', sw={'vcenter': 1})]
+        needs = {n['key']: n for n in spec.compute(items, spec.Master())['license_needs']}
+        self.assertEqual(set(needs), {'windows', 'rhel', 'vsphere', 'ubuntu', 'vcenter'})
+        self.assertEqual([c['row']['data']['basis'] for c in needs['windows']['choice']], ['win_vl', 'win_dsp'])
+        self.assertEqual(needs['rhel']['row']['data']['version'], '9.5')
+        self.assertEqual(needs['vsphere']['row']['data']['version'], '8')
+        self.assertEqual(needs['ubuntu']['row']['qty'], 1)
+        # 이미 있는 줄은 다시 제안하지 않는다 (Windows는 DSP든 Volume이든 하나만 있으면 됨)
+        items += [needs['windows']['choice'][1]['row'], needs['vsphere']['row']]
+        left = {n['key'] for n in spec.compute(items, spec.Master())['license_needs']}
+        self.assertEqual(left, {'rhel', 'ubuntu', 'vcenter'})
+
+    def test_basis_follows_product_and_edition(self):
+        self.assertEqual(spec.basis_for('RoseHA SAN', 'Linux'), 'roseha_linux')
+        self.assertEqual(spec.basis_for('Oracle', 'Standard'), 'oracle_se')
+        self.assertEqual(spec.basis_for('Windows Server DSP'), 'win_dsp')
+        self.assertEqual(spec.basis_for('Ubuntu'), '')
