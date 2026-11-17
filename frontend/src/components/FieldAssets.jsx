@@ -21,6 +21,7 @@ const ATTENTION_STATUSES = ['확인 필요', 'Parts 교체 필요', '사용불�
 const faultParts = (a) => PARTS.filter(([k]) => a.health?.[k] === 'Fault').map(([, label]) => label);
 
 // 줄 왼쪽 상태 표시등 (랙 앞 LED처럼): 부품 Fault > 점검 필요·PM 미완료 > 미사용 > 정상
+const NO_SITE = '__no_site__'; // '현장 전체 선택'에서 현장이 비어 있는 서버
 const OFF_STATUSES = ['유휴 서버 전환', '폐기'];
 const ledOf = (a) => {
   const faults = faultParts(a);
@@ -207,6 +208,26 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
 
   const filtered = quick !== 'all' || Object.values(filters).some(Boolean);
   const checkedAssets = items.filter(a => checked.has(a.id));
+  // 현장 단위 선택: 그 현장 서버를 모두 체크 (이미 모두 체크돼 있으면 해제). 필터와 상관없이 현장 전체
+  const siteIds = (site) => items.filter(a => (a.site_group || '') === site).map(a => a.id);
+  const siteAllChecked = (site) => { const ids = siteIds(site); return ids.length > 0 && ids.every(id => checked.has(id)); };
+  const toggleSite = (site) => {
+    const ids = siteIds(site);
+    const all = siteAllChecked(site);
+    setChecked(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => (all ? next.delete(id) : next.add(id)));
+      return next;
+    });
+  };
+  const siteCounts = useMemo(() => {
+    const m = {};
+    items.forEach(a => { const k = a.site_group || ''; m[k] = (m[k] || 0) + 1; });
+    return m;
+  }, [items]);
+  const checkedBySite = Object.entries(checkedAssets.reduce((m, a) => {
+    const k = a.site_group || '현장 미지정'; m[k] = (m[k] || 0) + 1; return m;
+  }, {})).sort((x, y) => y[1] - x[1]);
   const allRowsChecked = rows.length > 0 && rows.every(a => checked.has(a.id));
   const toggleAllRows = () => setChecked(prev => {
     const next = new Set(prev);
@@ -276,6 +297,15 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
             {options[k].map(v => <option key={v} value={v}>{v}</option>)}
           </select>
         ))}
+        <select value="" onChange={(e) => { if (e.target.value !== '') toggleSite(e.target.value === NO_SITE ? '' : e.target.value); }}
+          aria-label="현장 단위로 서버 선택" title="고른 현장의 서버를 모두 체크합니다 (다시 고르면 해제)"
+          className="border border-blue-300 bg-blue-50 text-blue-800 font-bold rounded-lg py-2 px-2 text-sm outline-none max-w-[220px]">
+          <option value="">현장 전체 선택…</option>
+          {options.site_group.map(v => (
+            <option key={v} value={v}>{siteAllChecked(v) ? '✓ ' : ''}{v} ({siteCounts[v] || 0}대)</option>
+          ))}
+          {siteCounts[''] > 0 && <option value={NO_SITE}>현장 미지정 ({siteCounts['']}대)</option>}
+        </select>
         {filtered && <button onClick={resetFilters} className="text-xs font-bold text-slate-500 hover:text-slate-800 px-2">필터 초기화</button>}
         <span className="ml-auto flex items-center gap-3 text-[11px] text-slate-500">
           {LED_LEGEND.map(([c, label]) => <span key={label} className="inline-flex items-center gap-1"><span className="w-1.5 h-3 rounded-sm" style={{ background: c }} />{label}</span>)}
@@ -287,6 +317,9 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
       {checked.size > 0 && (
         <div className="bg-blue-600 text-white rounded-xl px-4 py-2.5 flex items-center gap-3 shadow-sm sticky top-0 z-20">
           <span className="text-sm font-bold">{checked.size}대 선택</span>
+          <span className="text-xs text-blue-100 truncate max-w-[40%]" title={checkedBySite.map(([k, n]) => `${k} ${n}대`).join(', ')}>
+            {checkedBySite.slice(0, 3).map(([k, n]) => `${k} ${n}`).join(', ')}{checkedBySite.length > 3 ? ` 외 ${checkedBySite.length - 3}곳` : ''}
+          </span>
           <button onClick={() => setBulkOpen(true)} className="px-3 py-1.5 rounded-lg bg-white text-blue-700 text-xs font-bold flex items-center hover:bg-blue-50">
             <ClipboardCheck size={14} className="mr-1.5" /> 한꺼번에 바꾸기 (PM 기록 · 정보)
           </button>
@@ -338,7 +371,16 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
                       {a.hostname}
                       {a.locally_modified && <span className="ml-1.5 font-sans text-[9px] font-bold text-violet-600 bg-violet-50 border border-violet-200 rounded px-1 py-px align-middle" title="ITAM에서 직접 수정했거나 PM 기록이 있는 장비입니다. monday CSV를 다시 가져와도 덮어쓰지 않습니다.">ITAM</span>}
                     </td>
-                    <td className="px-2 py-1.5 whitespace-nowrap">{a.site_group}</td>
+                    <td className="px-2 py-1.5 whitespace-nowrap group/site">
+                      {a.site_group}
+                      {a.site_group && (
+                        <button type="button" onClick={(e) => { e.stopPropagation(); toggleSite(a.site_group); }}
+                          title={`${a.site_group} 서버 ${siteCounts[a.site_group]}대 ${siteAllChecked(a.site_group) ? '선택 해제' : '모두 선택'}`}
+                          className="ml-1.5 px-1.5 py-px rounded border border-blue-200 text-[10px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 opacity-0 group-hover/site:opacity-100 focus:opacity-100">
+                          {siteAllChecked(a.site_group) ? '현장 해제' : '현장 전체'}
+                        </button>
+                      )}
+                    </td>
                     <td className="px-2 py-1.5 whitespace-nowrap">{a.complex}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap">{a.product}</td>
                     <td className="px-2 py-1.5 whitespace-nowrap">
