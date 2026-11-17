@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'import_export',
     'simple_history',
     'reviews',
+    'incidents',
 ]
 
 MIDDLEWARE = [
@@ -149,3 +150,10 @@ MEDIA_URL = '/media/'
 
 # 화면에서 템플릿을 올리지 않았을 때 쓸 투자심의 PPT 템플릿 경로 (선택)
 REVIEW_PPT_TEMPLATE = os.environ.get('REVIEW_PPT_TEMPLATE', '')
+
+# monday.com 주간보고 연동 (장애·유지보수 보고 → 주간보고 문서). 토큰은 저장소에 넣지 말고 서버 환경변수로만.
+MONDAY_API_TOKEN = os.environ.get('MONDAY_API_TOKEN', '')
+MONDAY_API_URL = os.environ.get('MONDAY_API_URL', 'https://api.monday.com/v2')
+MONDAY_API_VERSION = os.environ.get('MONDAY_API_VERSION', '')
+MONDAY_REPORT_BOARD_ID = os.environ.get('MONDAY_REPORT_BOARD_ID', '5333463389')
+MONDAY_DOC_COLUMN_ID = os.environ.get('MONDAY_DOC_COLUMN_ID', 'monday_doc')

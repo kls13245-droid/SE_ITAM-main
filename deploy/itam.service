@@ -8,6 +8,8 @@ Environment=DJANGO_DEBUG=False
 Environment=DJANGO_ALLOWED_HOSTS=192.168.70.250,localhost
 Environment=CSRF_TRUSTED_ORIGINS=http://192.168.70.250
 Environment=DJANGO_SECRET_KEY=change-me
+# monday 토큰 등 비밀값은 저장소 밖 파일에 둔다 (없어도 시작됨). README '장애·유지보수 보고' 참고
+EnvironmentFile=-/etc/itam/monday.env
 ExecStart=/root/SE_ITAM-main/start-backend.sh
 Restart=always
 

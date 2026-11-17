@@ -1,5 +1,5 @@
 import React from 'react';
-import { Folder, FolderOpen, Plus, RefreshCw, CheckCircle, X, Building, LogOut, Pencil, Trash2, MapPin, FileText } from 'lucide-react';
+import { Folder, FolderOpen, Plus, RefreshCw, CheckCircle, X, Building, LogOut, Pencil, Trash2, MapPin, FileText, AlertTriangle } from 'lucide-react';
 
 export default function Sidebar({
   siteData, loading, expandedCampus, selectedBuilding,
@@ -8,7 +8,7 @@ export default function Sidebar({
   onGoHome, onLogout, onRefresh, onStartAddCampus, onSaveCampus, onCancelCampus,
   onCampusClick, onStartAddBuilding, onSaveBuilding, onCancelBuilding, onBuildingClick,
   onRenameCampus, onDeleteCampus, onRenameBuilding, onDeleteBuilding,
-  activeView, onOpenFieldAssets, onOpenReviews,
+  activeView, onOpenFieldAssets, onOpenReviews, onOpenIncidents,
 }) {
   return (
     <div className="w-72 bg-slate-900 text-slate-300 flex flex-col shadow-xl z-10 shrink-0">
@@ -26,6 +26,10 @@ export default function Sidebar({
           <span className="truncate">현장 장비 (PM)</span>
         </button>
         <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-widest">Docs</div>
+        <button onClick={onOpenIncidents} className={`w-full flex items-center p-2 rounded mb-1 text-left ${activeView === 'incidents' ? 'bg-red-500/20 text-red-300 font-medium' : 'hover:bg-slate-800'}`}>
+          <AlertTriangle size={18} className={`mr-2 shrink-0 ${activeView === 'incidents' ? 'text-red-400' : 'text-slate-500'}`} />
+          <span className="truncate">장애·유지보수 보고</span>
+        </button>
         <button onClick={onOpenReviews} className={`w-full flex items-center p-2 rounded mb-4 text-left ${activeView === 'reviews' ? 'bg-violet-500/20 text-violet-300 font-medium' : 'hover:bg-slate-800'}`}>
           <FileText size={18} className={`mr-2 shrink-0 ${activeView === 'reviews' ? 'text-violet-400' : 'text-slate-500'}`} />
           <span className="truncate">투자심의 자료</span>
