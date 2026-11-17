@@ -4,7 +4,7 @@
 - apply_safe() : 판단이 필요 없는 정리만 한다 (앞뒤·겹친 공백, 빈 값, 같은 목록 안의 중복 값)
                  바꾼 내용은 변경 이력(simple_history)과 돌려주는 목록에 남는다.
 
-매크로 엑셀을 다시 가져오면 엑셀 기준으로 덮어쓰므로, 같은 수정을 원본 엑셀에도 해야 한다.
+기준정보는 ITAMS DB가 기준이다 (매크로 엑셀 가져오기는 없는 값만 더함).
 """
 import re
 from collections import defaultdict

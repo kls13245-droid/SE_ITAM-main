@@ -16,7 +16,3 @@ class Command(BaseCommand):
             self.stdout.write(f"[{c['area']}] {c['target']}: {c['before']} → {c['after']}")
         word = '바뀔 내용' if opts['dry_run'] else '반영'
         self.stdout.write(self.style.SUCCESS(f'{word} {len(changes)}건'))
-        if not opts['dry_run'] and changes:
-            self.stdout.write('\n원본 매크로 엑셀에도 같이 고칠 것:')
-            for where, what in master_fixes.EXCEL_TODO:
-                self.stdout.write(f'  - {where}: {what}')

@@ -404,7 +404,7 @@ function Master({ showToast }) {
   const commitImport = () => {
     setImportState(s => ({ ...s, busy: true }));
     upload('/api/reviews/master/import/', importState.file)
-      .then(() => { setImportState(null); load(); showToast('기준정보를 가져왔습니다.'); })
+      .then(() => { setImportState(null); load(); showToast('없는 값을 기준정보에 더했습니다.'); })
       .catch(err => { showToast(err.message, 'error'); setImportState(s => ({ ...s, busy: false })); });
   };
   const saveCode = () => apiJson(`/api/reviews/master/codes/${editing.id}/`, jsonBody('PUT', { cis_code: editing.cis_code }))
@@ -428,10 +428,10 @@ function Master({ showToast }) {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex flex-wrap items-center gap-3">
         <Database size={18} className="text-violet-500" />
         <div className="text-sm text-slate-600 flex-1 min-w-[240px]">
-          심의 매크로 엑셀의 <b>이름 관리자</b> 내용입니다. 매크로 엑셀(.xlsm)을 올리면 엑셀 기준으로 덮어씁니다.
+          구매 사양 화면에서 고르는 기준정보입니다. <b>ITAMS가 기준</b>이라 매크로 엑셀을 올려도 이미 있는 값은 바꾸거나 지우지 않고, 없는 값만 더합니다.
           {missing > 0 && <span className="ml-2 text-amber-600 font-medium">CIS 코드 확인 필요 {missing}개</span>}
         </div>
-        <FileButton accept=".xlsm,.xlsx" onPick={pickImport} className={btnPrimary}><Upload size={14} /> 매크로 엑셀에서 가져오기</FileButton>
+        <FileButton accept=".xlsm,.xlsx" onPick={pickImport} className={btnPrimary}><Upload size={14} /> 매크로 엑셀에서 없는 값 추가</FileButton>
       </div>
 
       {importState && (
@@ -447,8 +447,9 @@ function Master({ showToast }) {
                   const r = importState.preview[k];
                   return (
                     <div key={k} className="bg-white rounded-xl border border-violet-100 p-3 text-sm">
-                      <div className="font-bold text-slate-700">{label} {r.total}개</div>
-                      <div className="text-xs text-slate-500 mt-1">추가 {r.added} · 변경 {r.changed} · <span className={r.removed ? 'text-red-600 font-bold' : ''}>삭제 {r.removed}</span></div>
+                      <div className="font-bold text-slate-700">{label} <span className="font-normal text-slate-400">엑셀 {r.total}개</span></div>
+                      <div className="text-xs text-slate-500 mt-1">추가 {r.added} · 빈칸 채움 {r.filled}
+                        {r.skipped > 0 && <span title="화면이나 정리 명령으로 지우거나 이름을 바꾼 값"> · 예전에 지운 값이라 건너뜀 {r.skipped}</span>}</div>
                     </div>
                   );
                 })}
@@ -459,7 +460,7 @@ function Master({ showToast }) {
               <div className="flex justify-end gap-2">
                 <button onClick={() => setImportState(null)} className={btnGhost}>취소</button>
                 <button onClick={commitImport} disabled={importState.busy} className={btnPrimary}>
-                  {importState.busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} 이대로 가져오기
+                  {importState.busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle size={14} />} 없는 값 추가하기
                 </button>
               </div>
             </>
@@ -469,7 +470,7 @@ function Master({ showToast }) {
 
       {empty ? (
         <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center text-slate-400">
-          아직 기준정보가 없습니다. 위의 '매크로 엑셀에서 가져오기'로 심의 매크로 엑셀을 올려 주세요.
+          아직 기준정보가 없습니다. 처음 한 번은 위의 '매크로 엑셀에서 없는 값 추가'로 심의 매크로 엑셀을 올려 주세요.
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col min-h-0 flex-1">
@@ -534,7 +535,7 @@ function Master({ showToast }) {
             {sub === 'check' && (
               <div className="p-4 space-y-3">
                 <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
-                  <span className="flex-1 min-w-[260px]">서버 모델·CPU 호환 목록·품목 CIS 코드가 서로 맞는지 확인합니다. 공백·중복은 바로 정리할 수 있고, 나머지는 확인한 뒤 고쳐 주세요. 매크로 엑셀을 다시 가져오면 엑셀 기준으로 덮어쓰므로 원본 엑셀도 같이 고쳐 주세요.</span>
+                  <span className="flex-1 min-w-[260px]">서버 모델·CPU 호환 목록·품목 CIS 코드가 서로 맞는지 확인합니다. 공백·중복은 바로 정리할 수 있고, 나머지는 확인한 뒤 고쳐 주세요. CIS 코드는 고객사에서 받은 뒤 '품목 CIS 코드' 탭에서 입력합니다.</span>
                   <button onClick={runCheck} disabled={checkState?.busy} className={btnGhost}>
                     {checkState?.busy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} 다시 검사</button>
                   {(checkState?.issues || []).some(i => i.level === 'fix') && (
@@ -544,7 +545,7 @@ function Master({ showToast }) {
                 </div>
                 {checkState?.changes?.length > 0 && (
                   <div className="text-xs bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-0.5">
-                    <div className="font-bold text-blue-800 mb-1">정리한 내용 (원본 엑셀에도 같이 반영해 주세요)</div>
+                    <div className="font-bold text-blue-800 mb-1">정리한 내용</div>
                     {checkState.changes.map((c, i) => <div key={i}>{c.area} · {c.target}: {JSON.stringify(c.before)} → {JSON.stringify(c.after)}</div>)}
                   </div>
                 )}

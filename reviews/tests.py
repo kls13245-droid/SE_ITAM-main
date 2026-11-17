@@ -91,10 +91,11 @@ class MasterImportTest(ReviewBase):
         self.assertEqual(MasterList.objects.get(name='제조사_서버').values, ['DELL', 'HPE'])
         self.assertEqual(MasterList.objects.get(name='제조사_서버').group, '제조사')
         self.assertEqual(CpuSpec.objects.get(name='Xeon Gold 5515').cores, '8')
-        # 다시 가져오면 바뀐 코드만 변경으로 잡힘
+        # ITAMS DB가 기준: 다시 가져와도 이미 있는 값은 바꾸지 않는다
         r = self.upload('/api/reviews/master/import/', make_workbook(cis_r660='Q430-999999'))
-        self.assertEqual(r.json()['codes'], {'added': 0, 'changed': 1, 'removed': 0, 'total': 2})
-        self.assertEqual(PartCode.objects.get(name='R660').history.count(), 2)
+        self.assertEqual(r.json()['codes'], {'added': 0, 'filled': 0, 'skipped': 0, 'total': 2})
+        self.assertEqual(PartCode.objects.get(name='R660').cis_code, 'Q430-128953')
+        self.assertEqual(PartCode.objects.get(name='R660').history.count(), 1)
         # 선택 목록·CPU 사양도 변경 이력이 남는다
         self.assertEqual(MasterList.objects.get(name='제조사_서버').history.count(), 1)
         self.assertEqual(CpuSpec.objects.get(name='Xeon Gold 5515').history.count(), 1)
@@ -103,6 +104,21 @@ class MasterImportTest(ReviewBase):
         cpu.save()
         self.assertEqual(cpu.history.first().cores, '16')
         self.assertEqual(cpu.history.last().cores, '8')
+
+    def test_reimport_adds_only_missing_and_keeps_removed_out(self):
+        self.upload('/api/reviews/master/import/', make_workbook(cis_r660=''))
+        # 화면에서 고치고 지운 값
+        lst = MasterList.objects.get(name='제조사_서버')
+        lst.values = ['DELL', 'SUPERMICRO']   # HPE 삭제, SUPERMICRO 추가
+        lst.save()
+        PartCode.objects.filter(name='R760').update(cis_code='Q430-000001')
+        r = self.upload('/api/reviews/master/import/', make_workbook(cis_r660='Q430-128953'), mode='preview').json()
+        self.assertEqual((r['codes']['filled'], r['lists']['skipped'], r['lists']['added']), (1, 1, 0))
+        self.assertEqual(PartCode.objects.get(name='R660').cis_code, '')       # 미리 보기는 저장 안 함
+        self.upload('/api/reviews/master/import/', make_workbook(cis_r660='Q430-128953'))
+        self.assertEqual(PartCode.objects.get(name='R660').cis_code, 'Q430-128953')   # 빈칸은 채움
+        self.assertEqual(PartCode.objects.get(name='R760').cis_code, 'Q430-000001')   # 있는 값은 그대로
+        self.assertEqual(MasterList.objects.get(name='제조사_서버').values, ['DELL', 'SUPERMICRO'])  # 지운 HPE는 안 돌아옴
 
     def test_master_list_api(self):
         self.upload('/api/reviews/master/import/', make_workbook())
