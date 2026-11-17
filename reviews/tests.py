@@ -206,6 +206,18 @@ SAMPLE_ITEMS = [
 ]
 
 
+class ListLabelTest(TestCase):
+    def test_excel_names_become_readable(self):
+        from .services import list_label
+        cases = {'List_DL380_Gen10Plus': 'DL380 Gen10+', 'List_R760': 'R760', 'GPU_DL380_Gen11': 'DL380 Gen11',
+                 '서버모델_DELL': 'DELL', '제조사_1G스위치': '1G스위치', '모델_스위치_DELL': '스위치 모델 · DELL',
+                 'Spec_Rack_HPE': 'Rack 사양 · HPE', 'vSphere_구독_ver': 'vSphere 구독 버전',
+                 'Windows_Server_DSP_Edition': 'Windows Server DSP 에디션', 'SW_MicroSoft': 'MicroSoft',
+                 'MEMORY': '메모리', 'HBA': 'HBA'}
+        for name, label in cases.items():
+            self.assertEqual(list_label(name), label, name)
+
+
 class SpecCalcTest(TestCase):
     def setUp(self):
         self.master = spec.Master({'Xeon Gold 5515': ('3.2', '8')},

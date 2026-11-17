@@ -11,7 +11,7 @@ from assets.views import api, body, error, require_admin_confirm
 from .models import CpuSpec, MasterList, PartCode, PptTemplate, ReviewCase, ReviewOutput
 from . import spec
 from .services import (active_template, add_list_value, attach_source, build_spec_excel, calc_items, case_items, check_upload,
-                       clean_items, generate, import_items, import_master, safe_stem, save_items)
+                       clean_items, generate, import_items, import_master, list_dict, safe_stem, save_items)
 
 CASE_FIELDS = ('title', 'line', 'product', 'year', 'status', 'note', 'input_mode')
 INPUT_MODES = [m for m, _ in ReviewCase.INPUT_CHOICES]
@@ -246,8 +246,7 @@ def template_file(request):
 def master(request):
     return JsonResponse({
         'codes': [{'id': p.id, 'name': p.name, 'key': p.key, 'cis_code': p.cis_code} for p in PartCode.objects.all()],
-        'lists': [{'id': m.id, 'name': m.name, 'group': m.group, 'values': m.values, 'source': m.source}
-                  for m in MasterList.objects.all()],
+        'lists': [list_dict(m) for m in MasterList.objects.all()],
         'cpus': [{'id': c.id, 'name': c.name, 'clock': c.clock, 'cores': c.cores} for c in CpuSpec.objects.all()],
     })
 

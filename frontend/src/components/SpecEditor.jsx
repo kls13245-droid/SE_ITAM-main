@@ -78,7 +78,7 @@ function Sel({ v, on, names, lists, onAdd, w = 'w-28', needs, addTo }) {
     <select className={`${cellCls} ${w} ${missing ? 'border-amber-400 bg-amber-50 text-amber-800' : ''} ${value ? '' : 'text-slate-400'}`}
       value={value} title={missing ? '기준정보 목록에 없는 값입니다. 목록에서 다시 고르거나 목록에 추가해 주세요.' : value}
       onChange={e => (e.target.value === ADD ? onAdd(addTo || keys[0] || names[0], on) : on(e.target.value))}>
-      <option value="">선택</option>
+      <option value="">{keys.length ? '선택' : '목록 없음'}</option>
       {missing && <option value={value}>⚠ {value} (목록에 없음)</option>}
       {options.map(o => <option key={o} value={o} className="text-slate-800">{o}</option>)}
       <option value={ADD} className="text-blue-600">＋ 목록에 추가…</option>
@@ -103,7 +103,7 @@ function AddModal({ req, onClose, onDone }) {
     <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={onClose}>
       <form onSubmit={submit} onClick={e => e.stopPropagation()} className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-md space-y-3">
         <div className="text-base font-bold text-slate-800">기준정보 목록에 추가</div>
-        <div className="text-xs text-slate-500">목록 <span className="font-mono text-slate-700">{req.name}</span>에 값을 더하고 이 칸에 넣습니다. 변경 이력이 남고, 다른 심의건에서도 이 값을 고를 수 있습니다.</div>
+        <div className="text-xs text-slate-500">목록 <span className="font-medium text-slate-700" title={req.name}>{req.label || req.name}</span>에 값을 더하고 이 칸에 넣습니다. 변경 이력이 남고, 다른 심의건에서도 이 값을 고를 수 있습니다.</div>
         <label className="block text-sm text-slate-600">추가할 값
           <input autoFocus className={`${cellCls} w-full text-sm py-2`} value={value} onChange={e => setValue(e.target.value)} placeholder="철자를 한 번 더 확인해 주세요" /></label>
         {isCpu && (
@@ -174,6 +174,7 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
   const [calc, setCalc] = useState({ rows: [], sw_total: {} });
   const [meta, setMeta] = useState({ sw_products: [], kinds: { etc: [], nw: [], license: [] } });
   const [lists, setLists] = useState({});
+  const [labels, setLabels] = useState({}); // 이름 관리자 이름 → 화면 이름
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState('');
   const [warnings, setWarnings] = useState([]);
@@ -194,7 +195,7 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
     apiJson(`/api/reviews/${c.id}/items/`).then(d => {
       setItems(withKeys(d.items)); setCalc(d.calc); setMeta({ sw_products: d.sw_products, kinds: d.kinds });
     }).catch(err => showToast(err.message, 'error'));
-    apiJson('/api/reviews/master/').then(d => setLists(Object.fromEntries(d.lists.map(l => [l.name, l.values]))))
+    apiJson('/api/reviews/master/').then(d => { setLists(Object.fromEntries(d.lists.map(l => [l.name, l.values]))); setLabels(Object.fromEntries(d.lists.map(l => [l.name, l.label]))); })
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [c.id]);
@@ -323,14 +324,9 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
 
   // 기준정보 목록에서 고르는 칸. names가 없으면(앞 칸을 아직 안 고름) needs 문구로 막아 둔다
   const sel = (v, on, names, w, needs, addTo) => (
-    <Sel v={v} on={on} names={names} lists={lists} w={w} needs={needs} addTo={addTo} onAdd={(name, pick) => setAddReq({ name, on: pick })} />
+    <Sel v={v} on={on} names={names} lists={lists} w={w} needs={needs} addTo={addTo} onAdd={(name, pick) => setAddReq({ name, label: labels[name], on: pick })} />
   );
-  // GPU 목록: 모델별 목록(GPU_R760 등)이 있으면 그것, 없으면 모든 모델의 GPU 목록을 합쳐서 보여 준다
-  const gpuNames = (model) => {
-    if (!model) return null;
-    const own = findList(lists, `GPU_${us(model)}`);
-    return own ? [own] : Object.keys(lists).filter(n => n.startsWith('GPU_')).sort();
-  };
+
   const calcOf = useMemo(() => {
     const m = {};
     (items || []).forEach((it, i) => { m[it._k] = calc.rows?.[i] || {}; });
@@ -345,8 +341,9 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
   return (
     <div className="space-y-4">
       {addReq && <AddModal req={addReq} onClose={() => setAddReq(null)} onDone={(l, value) => {
-        setLists(prev => ({ ...prev, [l.name]: l.values })); addReq.on(value); setAddReq(null);
-        showToast(`기준정보 '${l.name}'에 '${value}'을(를) 추가했습니다.`);
+        setLists(prev => ({ ...prev, [l.name]: l.values })); setLabels(prev => ({ ...prev, [l.name]: l.label }));
+        addReq.on(value); setAddReq(null);
+        showToast(`기준정보 '${l.label || l.name}'에 '${value}'을(를) 추가했습니다.`);
       }} />}
       {Object.keys(lists).length === 0 && (
         <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
@@ -430,8 +427,7 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
                     </PartList></td>
                   <td className={tdTop}>
                     <PartList parts={d.gpus} onChange={v => setData(k, 'gpus', v)} blank={blankPart.gpus} label="GPU">
-                      {(p, set) => <>{sel(p.model, v => set('model', v), gpuNames(it.model), 'w-28', '모델 먼저',
-                        it.model ? `GPU_${us(it.model)}` : null)}<Inp v={p.qty} on={v => set('qty', v)} w="w-12" ph="수" /></>}
+                      {(p, set) => <>{sel(p.model, v => set('model', v), it.model ? [`GPU_${us(it.model)}`] : null, 'w-28', '모델 먼저')}<Inp v={p.qty} on={v => set('qty', v)} w="w-12" ph="수" /></>}
                     </PartList></td>
                   <td className={td}><Inp v={it.note} on={v => setField(k, 'note', v)} w="w-32" /></td>
                   <RowTools onMove={dir => move(it._k, dir)} onCopy={() => duplicate(it._k)} onRemove={() => remove(it._k)} />
