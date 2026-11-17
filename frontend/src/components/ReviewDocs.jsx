@@ -394,7 +394,7 @@ function Master({ showToast }) {
   const missing = useMemo(() => (data?.codes || []).filter(p => !CIS_OK.test(p.cis_code.trim())).length, [data]);
   const groups = useMemo(() => {
     const out = {};
-    (data?.lists || []).filter(l => match(l.name, l.values.join(' '))).forEach(l => { (out[l.group] ||= []).push(l); });
+    (data?.lists || []).filter(l => match(l.label, l.name, l.values.join(' '))).forEach(l => { (out[l.group] ||= []).push(l); });
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, q]);
@@ -504,7 +504,7 @@ function Master({ showToast }) {
                 <div className="text-xs font-bold text-violet-600 uppercase mb-2">{g}</div>
                 {lists.map(l => (
                   <div key={l.id} className="flex gap-3 py-1.5 text-sm">
-                    <span className="w-56 shrink-0 font-mono text-xs text-slate-600 pt-0.5" title={l.source}>{l.name}</span>
+                    <span className="w-56 shrink-0 text-sm font-medium text-slate-700" title={`엑셀 이름: ${l.name}\n위치: ${l.source}`}>{l.label || l.name}</span>
                     <div className="flex flex-wrap gap-1">{l.values.map((v, i) => <span key={i} className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-xs">{v}</span>)}</div>
                   </div>
                 ))}

@@ -73,6 +73,26 @@ def list_group(name):
     return '기타'
 
 
+_LABEL_WORDS = {'MEMORY': '메모리', 'DiskType': '디스크 종류'}
+
+
+def list_label(name):
+    """이름 관리자 이름 → 화면에 보일 이름 (엑셀 이름 규칙의 접두어·'_'·'Plus'를 사람이 읽는 형태로)
+    예: List_DL380_Gen10Plus → DL380 Gen10+, 모델_스위치_DELL → 스위치 모델 · DELL, vSphere_구독_ver → vSphere 구독 버전"""
+    def words(s):
+        return re.sub(r'(?<=\d)Plus\b', '+', s.replace('_', ' ')).strip()
+    head, _, rest = name.partition('_')
+    if head in ('List', '제조사', '서버모델', '스토리지모델', 'GPU', 'SW') and rest:
+        return words(rest)
+    if head in ('모델', 'Spec') and rest:
+        kind, _, maker = rest.partition('_')
+        return f"{words(kind)} {'모델' if head == '모델' else '사양'}" + (f' · {words(maker)}' if maker else '')
+    for suffix, word in (('_ver', '버전'), ('_Edition', '에디션')):
+        if name.endswith(suffix):
+            return f'{words(name[:-len(suffix)])} {word}'
+    return _LABEL_WORDS.get(name, words(name))
+
+
 def _range_values(wb, defined_name):
     """이름이 가리키는 범위의 값 목록 (빈칸·오류값 제외)과 (시트, 첫 셀 행, 열) 정보"""
     values, first = [], None
@@ -194,7 +214,12 @@ def add_list_value(name, value, clock='', cores=''):
             if (cpu.clock, cpu.cores) != (clock, cores):
                 cpu.clock, cpu.cores = clock, cores
                 cpu.save()
-    return {'id': lst.id, 'name': lst.name, 'group': lst.group, 'values': lst.values, 'source': lst.source}
+    return list_dict(lst)
+
+
+def list_dict(m):
+    return {'id': m.id, 'name': m.name, 'label': list_label(m.name), 'group': m.group, 'values': m.values,
+            'source': m.source}
 
 
 # ---------------------------------------------------------------------------
