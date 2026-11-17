@@ -34,6 +34,7 @@ urlpatterns = [
     path('api/field-assets/import/', views.import_field_assets_view, name='import_field_assets'),
     path('api/field-assets/import/template/', views.field_assets_template, name='field_assets_template'),
     path('api/field-assets/add/', views.add_field_asset, name='add_field_asset'),
+    path('api/field-assets/bulk/', views.bulk_update_field_assets, name='bulk_update_field_assets'),
     path('api/field-assets/place/', views.place_field_assets_view, name='place_field_assets'),
     path('api/field-assets/update/<int:asset_id>/', views.update_field_asset, name='update_field_asset'),
     path('api/field-assets/delete/<int:asset_id>/', views.delete_field_asset, name='delete_field_asset'),

@@ -21,15 +21,15 @@ export default function Sidebar({
       </div>
       <div className="overflow-y-auto flex-1 p-3">
         <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-widest">Field</div>
-        <button onClick={onOpenFieldAssets} className={`w-full flex items-center p-2 rounded mb-4 text-left ${activeView === 'field' ? 'bg-orange-500/20 text-orange-300 font-medium' : 'hover:bg-slate-800'}`}>
+        <button onClick={onOpenFieldAssets} className={`w-full flex items-center p-2 rounded mb-1 text-left ${activeView === 'field' ? 'bg-orange-500/20 text-orange-300 font-medium' : 'hover:bg-slate-800'}`}>
           <MapPin size={18} className={`mr-2 shrink-0 ${activeView === 'field' ? 'text-orange-400' : 'text-slate-500'}`} />
-          <span className="truncate">현장 장비 (PM)</span>
+          <span className="truncate">서버 현황</span>
         </button>
-        <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-widest">Docs</div>
-        <button onClick={onOpenIncidents} className={`w-full flex items-center p-2 rounded mb-1 text-left ${activeView === 'incidents' ? 'bg-red-500/20 text-red-300 font-medium' : 'hover:bg-slate-800'}`}>
+        <button onClick={onOpenIncidents} className={`w-full flex items-center p-2 rounded mb-4 text-left ${activeView === 'incidents' ? 'bg-red-500/20 text-red-300 font-medium' : 'hover:bg-slate-800'}`}>
           <AlertTriangle size={18} className={`mr-2 shrink-0 ${activeView === 'incidents' ? 'text-red-400' : 'text-slate-500'}`} />
           <span className="truncate">장애·유지보수 보고</span>
         </button>
+        <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-widest">Docs</div>
         <button onClick={onOpenReviews} className={`w-full flex items-center p-2 rounded mb-4 text-left ${activeView === 'reviews' ? 'bg-violet-500/20 text-violet-300 font-medium' : 'hover:bg-slate-800'}`}>
           <FileText size={18} className={`mr-2 shrink-0 ${activeView === 'reviews' ? 'text-violet-400' : 'text-slate-500'}`} />
           <span className="truncate">투자심의 자료</span>

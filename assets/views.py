@@ -408,6 +408,68 @@ def update_field_asset(request, asset_id):
     return JsonResponse(field_asset_dict(asset))
 
 
+# 여러 대를 한 번에 바꿀 수 있는 항목 (호스트명·S/N·IP처럼 장비마다 다른 값은 제외)
+BULK_FIELDS = ('status', 'ipmi_status', 'warranty_end', 'site_group', 'complex', 'product', 'model_name', 'note')
+BULK_LIMIT = 500
+
+
+@api('POST')
+def bulk_update_field_assets(request):
+    """고른 장비 여러 대에 PM 점검 기록을 한꺼번에 넣고/넣거나 정보를 한꺼번에 바꾼다.
+
+    body: {ids: [..], fields: {status: '가동', ...}, pm: {pm_date, pm_status, worker, note, health: {cpu: '정상', ...}}}
+      - fields: 보낸 항목만 바꾼다
+      - pm.health: 보낸 부품만 그 값으로, 안 보낸 부품은 장비마다 지금 값을 그대로 둔다
+    전부 성공하거나 전부 취소된다.
+    """
+    data = body(request)
+    ids = sorted({int(i) for i in data.get('ids') or []})
+    if not ids:
+        raise ValidationError('장비를 하나 이상 골라 주세요.')
+    if len(ids) > BULK_LIMIT:
+        raise ValidationError(f'한 번에 {BULK_LIMIT}대까지 바꿀 수 있습니다.')
+    fields = data.get('fields') or {}
+    bad = [k for k in fields if k not in BULK_FIELDS]
+    if bad:
+        raise ValidationError(f"한꺼번에 바꿀 수 없는 항목입니다: {', '.join(bad)}")
+    pm = data.get('pm') or None
+    if not fields and not pm:
+        raise ValidationError('바꿀 내용이 없습니다.')
+
+    assets = list(FieldAsset.objects.filter(id__in=ids))
+    if len(assets) != len(ids):
+        raise ValidationError('고른 장비 중 일부가 없어졌습니다. 새로고침 후 다시 골라 주세요.')
+
+    if pm:
+        pm_date = _parse_date(pm.get('pm_date'), '점검일')
+        if not pm_date:
+            raise ValidationError('점검일을 입력해 주세요.')
+        pm_status = (pm.get('pm_status') or '완료').strip()
+        if pm_status not in PMRecord.PM_STATUSES:
+            raise ValidationError(f"점검 결과 값이 올바르지 않습니다: '{pm_status}'")
+        part_values = {k: v for k, v in (pm.get('health') or {}).items() if v}
+        unknown = [k for k in part_values if k not in FieldAsset.HEALTH_PARTS]
+        if unknown:
+            raise ValidationError(f"알 수 없는 부품: {', '.join(unknown)}")
+        clean_health(part_values, FieldAsset.HEALTH_PARTS)  # 값 검사
+        worker = (pm.get('worker') or request.user.username).strip()
+        note = (pm.get('note') or '').strip()
+
+    with transaction.atomic():
+        for asset in assets:
+            if fields:
+                for k, v in clean_field_asset(fields, asset).items():
+                    setattr(asset, k, v)
+                asset.save()
+                sync_rack_server(asset)
+            if pm:
+                health = {**(asset.health or {}), **part_values}  # 고른 부품만 바꾸고 나머지는 그대로
+                PMRecord.objects.create(asset=asset, pm_date=pm_date, pm_status=pm_status, health=health,
+                                        worker=worker, note=note, created_by=request.user)
+                refresh_asset_pm(asset)
+    return JsonResponse({'updated': len(assets), 'items': [field_asset_dict(a) for a in assets]})
+
+
 @api('POST')
 def place_field_assets_view(request):
     """아직 랙에 없는 현장 장비를 랙에 임시 배치. mode=preview 이면 결과만 돌려준다."""

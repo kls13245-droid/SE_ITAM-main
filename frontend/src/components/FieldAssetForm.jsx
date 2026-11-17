@@ -60,7 +60,7 @@ export default function FieldAssetForm({ asset, options, onCancel, onSave }) {
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
       <form onSubmit={submit} className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-          <h3 className="text-lg font-bold text-slate-800">{isNew ? '현장 장비 추가' : `장비 정보 수정 · ${asset.hostname}`}</h3>
+          <h3 className="text-lg font-bold text-slate-800">{isNew ? '서버 추가' : `서버 정보 수정 · ${asset.hostname}`}</h3>
           <button type="button" onClick={onCancel} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"><X size={18} /></button>
         </div>
 

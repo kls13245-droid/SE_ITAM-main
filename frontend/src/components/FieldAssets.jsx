@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   MapPin, Search, Upload, Download, X, ExternalLink, AlertTriangle, CheckCircle,
-  Wrench, Wifi, ClipboardList, Server, ChevronUp, ChevronDown, Plus, Pencil, Trash2, LayoutGrid,
+  Wrench, Wifi, ClipboardList, Server, ChevronUp, ChevronDown, Plus, Pencil, Trash2, LayoutGrid, ClipboardCheck,
 } from 'lucide-react';
 import { apiJson, jsonBody, API_BASE_URL } from '../api/client';
 import FieldAssetForm, { PMRecordForm, PMRecordList } from './FieldAssetForm';
+import FieldAssetBulk from './FieldAssetBulk';
 import { PARTS, STATUS_STYLE } from './fieldAssetConstants';
 
 // monday 'SE파트 - PM 현황' 보드 (항목 링크용)
@@ -44,6 +45,8 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
   const [formAsset, setFormAsset] = useState(null); // {} = 새 장비, 장비 객체 = 수정
   const [importState, setImportState] = useState(null); // { file, preview, busy }
   const [placeState, setPlaceState] = useState(null); // { preview, busy } 랙 배치 확인 창
+  const [checked, setChecked] = useState(() => new Set()); // 여러 대 한꺼번에 바꾸기용 선택
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   const load = () => apiJson('/api/field-assets/')
     .then(setData)
@@ -96,8 +99,21 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
       })
       .catch(err => showToast(err.message, 'error'));
   };
+  const saveBulk = (payload) => apiJson('/api/field-assets/bulk/', jsonBody('POST', payload))
+    .then(r => {
+      const byId = Object.fromEntries(r.items.map(a => [a.id, a]));
+      setData(prev => ({ ...prev, items: prev.items.map(a => byId[a.id] || a) }));
+      setBulkOpen(false); setChecked(new Set());
+      showToast(`서버 ${r.updated}대를 한꺼번에 바꿨습니다.`);
+    })
+    .catch(err => showToast(err.message, 'error'));
+  const toggleCheck = (id) => setChecked(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const deleteAsset = (asset) => askDelete({
-    title: '현장 장비 삭제', target: `${asset.hostname} (${asset.site_group || '현장 미지정'})`,
+    title: '서버 삭제', target: `${asset.hostname} (${asset.site_group || '현장 미지정'})`,
     url: `/api/field-assets/delete/${asset.id}/`,
     warnings: ['이 장비의 PM 점검 기록이 모두 함께 삭제됩니다.', '랙에 자동 배치된 장비가 있다면 그쪽은 따로 남습니다.'],
     onDone: () => {
@@ -145,7 +161,7 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
     const blob = new Blob(['﻿' + [header.map(esc).join(','), ...lines].join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `현장장비_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `서버현황_${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
   };
@@ -175,15 +191,22 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
   };
 
   const filtered = quick !== 'all' || Object.values(filters).some(Boolean);
+  const checkedAssets = items.filter(a => checked.has(a.id));
+  const allRowsChecked = rows.length > 0 && rows.every(a => checked.has(a.id));
+  const toggleAllRows = () => setChecked(prev => {
+    const next = new Set(prev);
+    if (allRowsChecked) rows.forEach(a => next.delete(a.id)); else rows.forEach(a => next.add(a.id));
+    return next;
+  });
 
   return (
     <div className="flex-1 flex flex-col gap-4 min-w-0 w-full max-w-[1800px] mx-auto">
       {/* 제목 */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center"><MapPin className="text-orange-500 mr-2" size={22} /> 현장 장비 (PM 현황)</h2>
+          <h2 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center"><MapPin className="text-orange-500 mr-2" size={22} /> 서버 현황</h2>
           <p className="text-slate-500 text-sm mt-1">
-            고객사 현장에 설치된 장비입니다. 랙 실장도와는 별도로 관리합니다. · 마지막 CSV 등록 <b>{fmtDateTime(data.last_imported_at)}</b>
+            고객사 현장에 설치된 서버와 PM 현황입니다. 여러 대를 체크하면 한꺼번에 PM 기록·정보를 바꿀 수 있습니다. · 마지막 CSV 등록 <b>{fmtDateTime(data.last_imported_at)}</b>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -194,7 +217,7 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
             </button>
           )}
           <button onClick={() => setFormAsset({})} className="px-3 py-2 flex items-center bg-blue-600 text-white hover:bg-blue-700 rounded-lg text-xs font-bold">
-            <Plus size={14} className="mr-1.5" /> 장비 추가
+            <Plus size={14} className="mr-1.5" /> 서버 추가
           </button>
           <label className="px-3 py-2 flex items-center bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded-lg text-xs font-bold cursor-pointer">
             <Upload size={14} className="mr-1.5" /> CSV로 등록
@@ -242,6 +265,17 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
         <span className="ml-auto text-xs text-slate-500"><b className="text-slate-800">{rows.length}</b> / {items.length}대</span>
       </div>
 
+      {/* 선택한 서버 한꺼번에 바꾸기 */}
+      {checked.size > 0 && (
+        <div className="bg-blue-600 text-white rounded-xl px-4 py-2.5 flex items-center gap-3 shadow-sm sticky top-0 z-20">
+          <span className="text-sm font-bold">{checked.size}대 선택</span>
+          <button onClick={() => setBulkOpen(true)} className="px-3 py-1.5 rounded-lg bg-white text-blue-700 text-xs font-bold flex items-center hover:bg-blue-50">
+            <ClipboardCheck size={14} className="mr-1.5" /> 한꺼번에 바꾸기 (PM 기록 · 정보)
+          </button>
+          <button onClick={() => setChecked(new Set())} className="ml-auto text-xs font-bold text-blue-100 hover:text-white">선택 해제</button>
+        </div>
+      )}
+
       {/* 목록 */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex-1 min-h-[300px] overflow-auto">
         {loading ? (
@@ -249,13 +283,16 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
         ) : items.length === 0 ? (
           <div className="text-center text-slate-500 py-16 px-6">
             <MapPin size={40} className="mx-auto mb-3 text-slate-300" />
-            <p className="font-bold text-slate-600">아직 가져온 현장 장비가 없습니다.</p>
+            <p className="font-bold text-slate-600">아직 등록된 서버가 없습니다.</p>
             <p className="text-sm mt-1">오른쪽 위 <b>등록 양식</b>을 받아 작성한 뒤 <b>CSV로 등록</b>으로 올리거나, <b>장비 추가</b>로 한 대씩 등록하세요.</p>
           </div>
         ) : (
           <table className="w-full text-xs border-collapse">
             <thead className="sticky top-0 z-10">
               <tr className="bg-[#ddebf7] text-slate-800">
+                <th className="border-b border-r border-slate-300 px-2 py-2 w-8">
+                  <input type="checkbox" checked={allRowsChecked} onChange={toggleAllRows} title="보이는 목록 전체 선택/해제" />
+                </th>
                 {COLUMNS.map(([k, label]) => (
                   <th key={k} onClick={() => toggleSort(k)} className="border-b border-r border-slate-300 px-2 py-2 text-left font-bold whitespace-nowrap cursor-pointer select-none hover:bg-[#cfe2f3]">
                     <span className="inline-flex items-center">{label}
@@ -270,7 +307,10 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
                 const faults = faultParts(a);
                 return (
                   <tr key={a.id} onClick={() => setSelectedId(a.id)}
-                    className={`cursor-pointer border-b border-slate-100 hover:bg-blue-50 ${selected?.id === a.id ? 'bg-blue-50' : ''}`}>
+                    className={`cursor-pointer border-b border-slate-100 hover:bg-blue-50 ${selected?.id === a.id || checked.has(a.id) ? 'bg-blue-50' : ''}`}>
+                    <td className="px-2 py-1.5" onClick={(e) => { e.stopPropagation(); toggleCheck(a.id); }}>
+                      <input type="checkbox" checked={checked.has(a.id)} readOnly className="pointer-events-none" />
+                    </td>
                     <td className="px-2 py-1.5 font-mono font-bold text-blue-700 whitespace-nowrap">
                       {a.hostname}
                       {a.locally_modified && <span className="ml-1.5 font-sans text-[9px] font-bold text-violet-600 bg-violet-50 border border-violet-200 rounded px-1 py-px align-middle" title="ITAM에서 직접 수정했거나 PM 기록이 있는 장비입니다. monday CSV를 다시 가져와도 덮어쓰지 않습니다.">ITAM</span>}
@@ -297,7 +337,7 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
                   </tr>
                 );
               })}
-              {rows.length === 0 && <tr><td colSpan={COLUMNS.length} className="p-8 text-center text-slate-400">조건에 맞는 장비가 없습니다.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={COLUMNS.length + 1} className="p-8 text-center text-slate-400">조건에 맞는 장비가 없습니다.</td></tr>}
             </tbody>
           </table>
         )}
@@ -309,6 +349,7 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
           onDelete={() => deleteAsset(selected)} onAssetChanged={applyAsset} showToast={showToast} />, document.body)}
       {formAsset && createPortal(
         <FieldAssetForm asset={formAsset} options={options} onCancel={() => setFormAsset(null)} onSave={saveAsset} />, document.body)}
+      {bulkOpen && createPortal(<FieldAssetBulk assets={checkedAssets} onCancel={() => setBulkOpen(false)} onSave={saveBulk} />, document.body)}
       {placeState && createPortal(<PlaceConfirm state={placeState} onCancel={() => setPlaceState(null)} onCommit={commitPlace} />, document.body)}
       {importState && createPortal(<ImportConfirm state={importState} onCancel={() => setImportState(null)} onCommit={commitImport} />, document.body)}
     </div>
@@ -433,7 +474,7 @@ function ImportConfirm({ state, onCancel, onCommit }) {
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl">
         <div className="p-5 border-b border-slate-100">
-          <h3 className="text-lg font-bold text-slate-800 flex items-center"><Upload size={18} className="mr-2 text-amber-600" /> CSV로 현장 장비 등록</h3>
+          <h3 className="text-lg font-bold text-slate-800 flex items-center"><Upload size={18} className="mr-2 text-amber-600" /> CSV로 서버 등록</h3>
           <p className="text-sm text-slate-500 mt-0.5 font-mono">{state.file.name}</p>
         </div>
         <div className="p-5 text-sm">
@@ -482,7 +523,7 @@ function PlaceConfirm({ state, onCancel, onCommit }) {
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[88vh] flex flex-col">
         <div className="p-5 border-b border-slate-100">
           <h3 className="text-lg font-bold text-slate-800 flex items-center"><LayoutGrid size={18} className="mr-2 text-violet-600" /> 랙 구성도에 배치</h3>
-          <p className="text-sm text-slate-500 mt-0.5">아직 랙에 없는 현장 장비를 <b>단지 → 캠퍼스, 현장 → 건물, 제품 → 랙</b>으로 임시 배치합니다.</p>
+          <p className="text-sm text-slate-500 mt-0.5">아직 랙에 없는 서버를 <b>단지 → 캠퍼스, 현장 → 건물, 제품 → 랙</b>으로 임시 배치합니다.</p>
         </div>
         <div className="p-5 text-sm overflow-y-auto space-y-3">
           {!p ? <p className="text-slate-500">확인 중...</p> : (
@@ -493,7 +534,7 @@ function PlaceConfirm({ state, onCancel, onCommit }) {
               </div>
               <ul className="text-xs text-slate-600 list-disc pl-4 space-y-0.5">
                 <li>각 랙의 비어 있는 U에 아래부터 차례로 넣습니다. 실제 위치는 랙 화면에서 끌어다 옮기면 됩니다.</li>
-                <li>배치한 뒤 현장 장비에서 고친 호스트명·모델·상태·S/N·IP는 랙 장비에도 반영됩니다.</li>
+                <li>배치한 뒤 서버 현황에서 고친 호스트명·모델·상태·S/N·IP는 랙 장비에도 반영됩니다.</li>
               </ul>
               {p.renamed.length > 0 && (
                 <div className="text-xs bg-amber-50 text-amber-800 rounded-lg p-2">
