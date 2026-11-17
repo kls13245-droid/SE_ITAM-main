@@ -168,7 +168,7 @@ def case_items_view(request, case_id):
         items = save_items(case, body(request).get('items'))
         case.refresh_from_db()
         return items_response(case, items)
-    return items_response(case, case_items(case), sw_products=spec.SW_PRODUCTS, kinds={
+    return items_response(case, case_items(case), sw_products=spec.SW_PRODUCTS, license_basis=spec.LICENSE_BASIS, kinds={
         'etc': spec.ETC_KINDS, 'nw': spec.NW_KINDS, 'license': spec.LICENSE_KINDS})
 
 

@@ -167,7 +167,7 @@ function TemplateBar({ template, onChanged, showToast }) {
         <span className="font-medium text-slate-800 truncate">{template || '아직 없음. 템플릿(.pptx)을 한 번 올려 주세요.'}</span>
       </div>
       <div className="flex gap-2 shrink-0">
-        {template && <a href={`${API_BASE_URL}/api/reviews/template/file/`} className={btnGhost}><Download size={14} /> 내려받기</a>}
+        {template && <a download href={`${API_BASE_URL}/api/reviews/template/file/`} className={btnGhost}><Download size={14} /> 내려받기</a>}
         <FileButton accept=".pptx" onPick={pick} disabled={busy} className={btnGhost}>
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {template ? '바꾸기' : '템플릿 올리기'}
         </FileButton>
@@ -310,7 +310,7 @@ function CaseDetail({ c, hasTemplate, showToast, onChanged, onDelete }) {
               <div className="text-sm font-medium text-slate-800 truncate">{c.source_name || '아직 올리지 않았습니다.'}</div>
               {c.source_uploaded_at && <div className="text-xs text-slate-400">{fmtDateTime(c.source_uploaded_at)}</div>}
             </div>
-            {c.has_source && <a href={`${API_BASE_URL}/api/reviews/${c.id}/source/`} className={btnGhost}><Download size={14} /> 내려받기</a>}
+            {c.has_source && <a download href={`${API_BASE_URL}/api/reviews/${c.id}/source/`} className={btnGhost}><Download size={14} /> 내려받기</a>}
             <FileButton accept=".xlsm,.xlsx" onPick={uploadExcel} disabled={!!busy} className={btnGhost}>
               {busy === 'upload' ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {c.has_source ? '다시 올리기' : '올리기'}
             </FileButton>
@@ -341,8 +341,8 @@ function CaseDetail({ c, hasTemplate, showToast, onChanged, onDelete }) {
                 <span className="text-sm text-slate-700">{fmtDateTime(o.created_at)}</span>
                 <span className="text-xs text-slate-400">{o.created_by}</span>
                 <div className="ml-auto flex gap-2">
-                  {o.pptx_name && <a href={`${API_BASE_URL}/api/reviews/outputs/${o.id}/pptx/`} className={btnGhost} title={o.pptx_name}><Presentation size={14} className="text-orange-500" /> PPT</a>}
-                  {o.xlsx_name && <a href={`${API_BASE_URL}/api/reviews/outputs/${o.id}/xlsx/`} className={btnGhost} title={o.xlsx_name}><FileSpreadsheet size={14} className="text-emerald-600" /> 배포용 엑셀</a>}
+                  {o.pptx_name && <a download href={`${API_BASE_URL}/api/reviews/outputs/${o.id}/pptx/`} className={btnGhost} title={o.pptx_name}><Presentation size={14} className="text-orange-500" /> PPT</a>}
+                  {o.xlsx_name && <a download href={`${API_BASE_URL}/api/reviews/outputs/${o.id}/xlsx/`} className={btnGhost} title={o.xlsx_name}><FileSpreadsheet size={14} className="text-emerald-600" /> 배포용 엑셀</a>}
                   <button onClick={() => setOpenLog(openLog === o.id ? null : o.id)} className={btnGhost}>
                     실행 기록 {openLog === o.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                   </button>

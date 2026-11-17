@@ -171,7 +171,7 @@ function Section({ label, count, onAdd, children }) {
 const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged }, ref) {
   const [items, setItems] = useState(null);
   const [calc, setCalc] = useState({ rows: [], sw_total: {} });
-  const [meta, setMeta] = useState({ sw_products: [], kinds: { etc: [], nw: [], license: [] } });
+  const [meta, setMeta] = useState({ sw_products: [], license_basis: {}, kinds: { etc: [], nw: [], license: [] } });
   const [lists, setLists] = useState({});
   const [labels, setLabels] = useState({}); // 이름 관리자 이름 → 화면 이름
   const [dirty, setDirty] = useState(false);
@@ -192,7 +192,7 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
 
   useEffect(() => {
     apiJson(`/api/reviews/${c.id}/items/`).then(d => {
-      setItems(withKeys(d.items)); setCalc(d.calc); setMeta({ sw_products: d.sw_products, kinds: d.kinds });
+      setItems(withKeys(d.items)); setCalc(d.calc); setMeta({ sw_products: d.sw_products, license_basis: d.license_basis || {}, kinds: d.kinds });
     }).catch(err => showToast(err.message, 'error'));
     apiJson('/api/reviews/master/').then(d => { setLists(Object.fromEntries(d.lists.map(l => [l.name, l.values]))); setLabels(Object.fromEntries(d.lists.map(l => [l.name, l.label]))); })
       .catch(() => {});
@@ -241,6 +241,22 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
     return [...prev.slice(0, i + 1), copy, ...prev.slice(i + 1)];
   });
   const remove = (k) => update(prev => prev.filter(it => it._k !== k));
+  // 서버 OS·SW 수량 산정으로 필요한 라이선스 줄을 License 표 끝에 더한다
+  const addLicenses = (rows) => update(prev => [...prev, ...rows.map(r => ({ ...clone(r), _k: newKey() }))]);
+  // License 줄: 제품·에디션을 고르면 수량 기준을 그 제품 것으로 맞춘다
+  const basisOf = (model, edition) => {
+    const keys = meta.license_basis?.[model] || [];
+    const ed = String(edition || '').toUpperCase();
+    return keys.find(x => (ed === 'LINUX' && x.endsWith('linux')) || (ed === 'WINDOWS' && x.endsWith('win'))
+      || (ed === 'ENTERPRISE' && x.endsWith('_ee')) || (ed === 'STANDARD' && x.endsWith('_se'))) || keys[0] || '';
+  };
+  const setLicense = (k, field, value) => update(prev => prev.map(it => {
+    if (it._k !== k) return it;
+    const next = field === 'model' ? { ...it, model: value } : { ...it, data: { ...it.data, [field]: value } };
+    const keys = meta.license_basis?.[next.model];
+    if (keys) next.data = { ...next.data, basis: basisOf(next.model, next.data.edition) };
+    return next;
+  }));
   const move = (k, dir) => update(prev => {
     const i = prev.findIndex(it => it._k === k);
     let j = i + dir;
@@ -369,7 +385,7 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
           </button>
           {c.has_source && <button onClick={() => importExcel(null)} disabled={!!busy} className={btnGhost} title={c.source_name}>
             <Upload size={14} /> 올려 둔 엑셀에서 불러오기</button>}
-          {items.length > 0 && !dirty && <a href={`${API_BASE_URL}/api/reviews/${c.id}/items/excel/`} className={btnGhost}>
+          {items.length > 0 && !dirty && <a download href={`${API_BASE_URL}/api/reviews/${c.id}/items/excel/`} className={btnGhost}>
             <Download size={14} /> 구매 사양 엑셀</a>}
         </div>
       </div>
@@ -561,6 +577,25 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
 
       {/* License */}
       <Section onAdd={() => add('license')} label="License" count={of('license').length}>
+        {calc.license_needs?.length > 0 && (
+          <div className="px-3 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-800 flex flex-wrap items-center gap-2">
+            <span className="font-bold">서버 OS·SW 수량 산정 기준으로 빠진 라이선스</span>
+            {calc.license_needs.map(n => n.choice ? (
+              <span key={n.key} className="inline-flex items-center gap-1 bg-white border border-amber-200 rounded-lg pl-2 pr-1 py-0.5" title={n.reason}>
+                {n.label}
+                {n.choice.map(c => <button key={c.label} onClick={() => addLicenses([c.row])}
+                  className="px-1.5 py-0.5 rounded bg-amber-100 hover:bg-amber-200 font-medium">＋ {c.label}</button>)}
+              </span>
+            ) : (
+              <button key={n.key} onClick={() => addLicenses([n.row])} title={n.reason}
+                className="bg-white border border-amber-200 rounded-lg px-2 py-0.5 hover:bg-amber-100 font-medium">＋ {n.label}</button>
+            ))}
+            {calc.license_needs.filter(n => !n.choice).length > 1 && (
+              <button onClick={() => addLicenses(calc.license_needs.filter(n => !n.choice).map(n => n.row))}
+                className="ml-auto text-amber-900 underline">{calc.license_needs.some(n => n.choice) ? 'Windows 말고 모두 추가' : '모두 추가'}</button>
+            )}
+          </div>
+        )}
         <table className="text-xs">
           <thead className="bg-white border-b border-slate-100"><tr>
             {['유형', '제조사', '제품', '버전', 'Edition', '수량 기준 (SW 수량 산정)', '수량', '라이선스', '단위', '비고', ''].map((h, i) => <th key={i} className={th}>{h}</th>)}
@@ -576,14 +611,15 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
                     </select>
                   </td>
                   <td className={td}>{sel(it.maker, v => setField(k, 'maker', v), it.kind ? [`제조사_${it.kind}`] : null, 'w-36', '유형 먼저')}</td>
-                  <td className={td}>{sel(it.model, v => setField(k, 'model', v), it.maker ? [`SW_${it.maker}`] : null, 'w-44', '제조사 먼저')}<Code v={cc.codes?.sw} /></td>
+                  <td className={td}>{sel(it.model, v => setLicense(k, 'model', v), it.maker ? [`SW_${it.maker}`] : null, 'w-44', '제조사 먼저')}<Code v={cc.codes?.sw} /></td>
                   <td className={td}>{sel(d.version, v => setData(k, 'version', v), it.model ? [`${us(it.model)}_ver`] : null, 'w-24', '제품 먼저')}</td>
-                  <td className={td}>{sel(d.edition, v => setData(k, 'edition', v), it.model ? [`${us(it.model)}_Edition`] : null, 'w-28', '제품 먼저')}</td>
+                  <td className={td}>{sel(d.edition, v => setLicense(k, 'edition', v), it.model ? [`${us(it.model)}_Edition`] : null, 'w-28', '제품 먼저')}</td>
                   <td className={td}>
                     <select className={`${cellCls} w-48`} value={d.basis || ''} onChange={e => setData(k, 'basis', e.target.value)}
                       title={swProducts.find(p => p.key === d.basis)?.name || '수량을 직접 입력'}>
                       <option value="">직접 입력</option>
-                      {swProducts.map(p => <option key={p.key} value={p.key}>{SW_SHORT[p.key] || p.key} 합계 ({p.unit})</option>)}
+                      {swProducts.filter(p => !meta.license_basis?.[it.model] || meta.license_basis[it.model].includes(p.key) || p.key === d.basis)
+                        .map(p => <option key={p.key} value={p.key}>{SW_SHORT[p.key] || p.key} 합계 ({p.unit})</option>)}
                     </select>
                   </td>
                   <td className={td}>{d.basis
