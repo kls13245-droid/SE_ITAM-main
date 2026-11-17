@@ -505,3 +505,28 @@ class MasterCheckTest(ReviewBase):
         self.assertEqual(PartCode.objects.get(name='AFF A250 WAR').cis_code, 'Q430-102865')
         self.assertFalse([i for i in r['issues'] if i['level'] == 'fix'])
         self.assertTrue([i for i in r['issues'] if i['target'] == 'R770'])   # 판단이 필요한 것은 그대로
+
+
+class MasterFixesTest(ReviewBase):
+    def test_fixes_lists_codes_and_saved_items_once(self):
+        from . import master_fixes
+        MasterList.objects.create(name='제조사_서버', values=['DELL', 'HPE', 'LENOVO'])
+        MasterList.objects.create(name='서버모델_DELL', values=['R7725', 'R7715', 'R470'])
+        MasterList.objects.create(name='List_R360', values=['Xeon 6315P', 'E-2436'])
+        MasterList.objects.create(name='스토리지모델_NETAPP', values=['FAS2820', 'FAS7200'])
+        PartCode.objects.create(name='DSC 7050SX3', key='code_DSC_7050SX3', cis_code='Q430-107233')
+        case = ReviewCase.objects.create(title='DMS')
+        srv = SpecItem.objects.create(case=case, block='server', name='A', model='R360', data={'cpu': 'E-2436', 'os': 'Ubuntu16.04'})
+        sto = SpecItem.objects.create(case=case, block='storage', name='S', model='FAS7200', data={})
+        self.assertTrue(master_fixes.apply(dry_run=True))
+        self.assertEqual(MasterList.objects.get(name='제조사_서버').values, ['DELL', 'HPE', 'LENOVO'])  # dry-run은 저장 안 함
+        master_fixes.apply()
+        self.assertEqual(MasterList.objects.get(name='제조사_서버').values, ['DELL', 'HPE'])
+        self.assertEqual(MasterList.objects.get(name='서버모델_DELL').values, ['R7725', 'R7715', 'R770', 'R670', 'R6725', 'R6715', 'R470'])
+        self.assertEqual(MasterList.objects.get(name='List_R360').values, ['Xeon 6315P', 'Xeon E-2436'])
+        self.assertEqual(MasterList.objects.get(name='스토리지모델_NETAPP').values, ['FAS2820', 'FAS2720'])
+        self.assertEqual(MasterList.objects.get(name='SW_캐노니컬').values, ['Ubuntu'])
+        self.assertEqual(PartCode.objects.get(cis_code='Q430-107233').key, 'code_DCS_7050SX3')
+        srv.refresh_from_db(); sto.refresh_from_db()
+        self.assertEqual((srv.data['cpu'], srv.data['os'], sto.model), ('Xeon E-2436', 'Ubuntu 16.04', 'FAS2720'))
+        self.assertEqual(master_fixes.apply(), [])   # 두 번째 실행은 바뀌는 것 없음
