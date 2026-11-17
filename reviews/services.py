@@ -143,53 +143,104 @@ def read_master(wb):
     return codes, lists, cpus
 
 
-def _sync(model, incoming, key_field='name'):
-    """incoming(dict: 이름 → 값들)으로 테이블을 맞춘다. (추가, 변경, 삭제) 수를 돌려준다"""
-    existing = {getattr(o, key_field): o for o in model.objects.all()}
-    added = changed = 0
-    for name, fields in incoming.items():
-        obj = existing.pop(name, None)
-        if obj is None:
-            model.objects.create(**{key_field: name}, **fields)
-            added += 1
-        elif any(getattr(obj, f) != v for f, v in fields.items()):
-            for f, v in fields.items():
-                setattr(obj, f, v)
-            obj.save()
-            changed += 1
-    removed = len(existing)
-    for obj in existing.values():
-        obj.delete()
-    return {'added': added, 'changed': changed, 'removed': removed, 'total': len(incoming)}
+def _norm_key(v):
+    return re.sub(r'\s+', ' ', str(v or '')).strip().lower()
 
 
-def _diff(model, incoming, fields):
-    existing = {o.name: o for o in model.objects.all()}
-    added = sum(1 for n in incoming if n not in existing)
-    changed = sum(1 for n, v in incoming.items() if n in existing and any(getattr(existing[n], f) != v[f] for f in fields))
-    removed = sum(1 for n in existing if n not in incoming)
-    return {'added': added, 'changed': changed, 'removed': removed, 'total': len(incoming)}
+def _merge(incoming, dry_run):
+    """매크로 엑셀 값을 기준정보 DB에 합친다. DB가 기준이라 이미 있는 값은 바꾸거나 지우지 않는다.
+
+    - 없는 품목·목록·CPU는 새로 만들고, 있는 목록에는 없는 값만 뒤에 붙인다
+    - 비어 있는 칸(CIS 코드, 클럭·코어)만 엑셀 값으로 채운다
+    - 화면·정리 명령으로 지우거나 이름을 바꾼 값은 변경 이력에 남아 있으므로 다시 넣지 않는다 (skipped)
+    """
+    codes, lists, cpus = incoming
+    res = {k: {'added': 0, 'filled': 0, 'skipped': 0, 'total': len(v)}
+           for k, v in (('codes', codes), ('lists', lists), ('cpus', cpus))}
+
+    def gone_names(model):
+        current = set(model.objects.values_list('name', flat=True))
+        return {_norm_key(n) for n in model.history.values_list('name', flat=True).distinct() if n not in current}
+
+    # 품목 CIS 코드
+    existing = {_norm_key(p.name): p for p in PartCode.objects.all()}
+    gone = gone_names(PartCode)
+    for name, v in codes.items():
+        p = existing.get(_norm_key(name))
+        if p is None:
+            if _norm_key(name) in gone:
+                res['codes']['skipped'] += 1
+                continue
+            res['codes']['added'] += 1
+            if not dry_run:
+                PartCode.objects.create(name=name, key=v['key'], cis_code=v['cis_code'])
+        elif not p.cis_code.strip() and v['cis_code'].strip():
+            res['codes']['filled'] += 1
+            if not dry_run:
+                p.cis_code = v['cis_code']
+                p.save()
+
+    # 선택 목록
+    existing = {m.name.lower(): m for m in MasterList.objects.all()}
+    gone = gone_names(MasterList)
+    for name, v in lists.items():
+        m = existing.get(name.lower())
+        if m is None:
+            if _norm_key(name) in gone:
+                res['lists']['skipped'] += 1
+                continue
+            res['lists']['added'] += 1
+            if not dry_run:
+                MasterList.objects.create(name=name, **v)
+            continue
+        have = {_norm_key(x) for x in m.values}
+        removed = {_norm_key(x) for h in m.history.all() for x in (h.values or [])} - have
+        new = []
+        for x in v['values']:
+            k = _norm_key(x)
+            if k in have or k in {_norm_key(n) for n in new}:
+                continue
+            if k in removed:
+                res['lists']['skipped'] += 1
+                continue
+            new.append(x)
+        if new:
+            res['lists']['added'] += len(new)
+            if not dry_run:
+                m.values = m.values + new
+                m.save()
+
+    # CPU 사양
+    existing = {_norm_key(c.name): c for c in CpuSpec.objects.all()}
+    gone = gone_names(CpuSpec)
+    for name, v in cpus.items():
+        c = existing.get(_norm_key(name))
+        if c is None:
+            if _norm_key(name) in gone:
+                res['cpus']['skipped'] += 1
+                continue
+            res['cpus']['added'] += 1
+            if not dry_run:
+                CpuSpec.objects.create(name=name, **v)
+        elif (not c.clock and v['clock']) or (not c.cores and v['cores']):
+            res['cpus']['filled'] += 1
+            if not dry_run:
+                c.clock, c.cores = c.clock or v['clock'], c.cores or v['cores']
+                c.save()
+    return res
 
 
 def import_master(data, dry_run=False):
-    """심의 매크로 엑셀의 이름 관리자 내용을 기준정보 DB에 덮어쓴다 (엑셀에 없는 항목은 삭제)"""
+    """심의 매크로 엑셀의 이름 관리자 내용을 기준정보 DB에 합친다 (DB가 기준: 없는 것만 추가, 빈칸만 채움)"""
     wb = load_workbook(data)
     codes, lists, cpus = read_master(wb)
     if not codes and not lists:
         raise ValidationError('이름 관리자 항목을 찾지 못했습니다. 심의 매크로 엑셀(.xlsm)이 맞는지 확인해 주세요.')
-    if dry_run:
-        return {
-            'codes': _diff(PartCode, codes, ('key', 'cis_code')),
-            'lists': _diff(MasterList, lists, ('group', 'values', 'source')),
-            'cpus': _diff(CpuSpec, cpus, ('clock', 'cores')),
-            'missing_cis': sorted(n for n, v in codes.items() if not re.match(r'^Q4\w{2}-\w+$', v['cis_code'].strip())),
-        }
     with transaction.atomic():
-        return {
-            'codes': _sync(PartCode, codes),
-            'lists': _sync(MasterList, lists),
-            'cpus': _sync(CpuSpec, cpus),
-        }
+        res = _merge((codes, lists, cpus), dry_run)
+    if dry_run:
+        res['missing_cis'] = sorted(n for n, v in codes.items() if not re.match(r'^Q4\w{2}-\w+$', v['cis_code'].strip()))
+    return res
 
 
 def add_list_value(name, value, clock='', cores=''):

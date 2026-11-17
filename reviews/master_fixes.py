@@ -2,7 +2,7 @@
 
 python manage.py apply_master_fixes [--dry-run]
 여러 번 실행해도 결과가 같다. 바뀐 내용은 변경 이력(simple_history)에도 남는다.
-매크로 엑셀을 다시 가져오면 엑셀 기준으로 덮어쓰므로 원본 엑셀에도 같은 수정을 해야 한다 (EXCEL_TODO).
+지우거나 이름을 바꾼 값은 변경 이력에 남아 있어, 매크로 엑셀에서 없는 값을 더할 때도 다시 들어오지 않는다.
 """
 from django.db import transaction
 
@@ -29,17 +29,6 @@ RENAME_CODES = {'DSC 7050SX3': 'DCS 7050SX3'}
 # 8·9. 새 목록·값
 ADD_VALUES = [('SW_캐노니컬', 'Ubuntu', None), ('MEMORY', 'DDR4 16', None), ('MEMORY', 'DDR4 32', None)]
 
-EXCEL_TODO = [
-    ('DB 시트 B열 서버모델_DELL 범위', 'R770, R670, R6725, R6715 추가 (이름 관리자 범위도 넓히기)'),
-    ('DB 시트 B열 서버모델_HPE 범위', 'DL385·DL365·DL345·DL325 Gen12, DL20 Gen12, DL385·DL365·DL345·DL325 Gen11 추가'),
-    ('Sys_ValidationList (List_DL20_Gen10 등)', "E-2224 → Xeon E-2224 처럼 E-2xxx 10개 앞에 'Xeon ' 붙이기"),
-    ('DB 시트 제조사_서버', 'LENOVO 삭제'),
-    ('DB 시트 스토리지모델_NETAPP', 'FAS7200 → FAS2720'),
-    ('DB 시트 모델_스위치_ARISTA, G열 품목, 이름 관리자 code_DSC_7050SX3', 'DSC 7050SX3 → DCS 7050SX3 (이름은 code_DCS_7050SX3)'),
-    ('DB 시트 OS 범위', 'Ubuntu16.04 → Ubuntu 16.04'),
-    ('DB 시트 + 이름 관리자', 'SW_캐노니컬 = Ubuntu 새로 만들기'),
-    ('DB 시트 MEMORY 범위', 'DDR4 16, DDR4 32 추가'),
-]
 
 
 def _rename_all(values, mapping):

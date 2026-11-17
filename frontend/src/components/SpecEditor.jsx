@@ -113,7 +113,6 @@ function AddModal({ req, onClose, onDone }) {
           </div>
         )}
         {err && <div className="text-xs text-red-600">{err}</div>}
-        <p className="text-[11px] text-amber-700">기준정보 탭에서 매크로 엑셀을 다시 가져오면 엑셀 기준으로 덮어써서, 여기서 추가한 값은 빠집니다. 매크로 엑셀에도 같이 넣어 두세요.</p>
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} className={btnGhost}>취소</button>
           <button disabled={busy || !value.trim()} className={btnPrimary}>{busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} 추가하고 고르기</button>
