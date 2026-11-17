@@ -1,5 +1,5 @@
-import React from 'react';
-import { Folder, FolderOpen, Plus, RefreshCw, CheckCircle, X, Building, LogOut, Pencil, Trash2, MapPin, FileText, AlertTriangle } from 'lucide-react';
+import { Folder, FolderOpen, Plus, RefreshCw, CheckCircle, X, Building, LogOut, Pencil, Trash2 } from 'lucide-react';
+import SidebarMenu from './SidebarMenu';
 
 export default function Sidebar({
   siteData, loading, expandedCampus, selectedBuilding,
@@ -8,7 +8,7 @@ export default function Sidebar({
   onGoHome, onLogout, onRefresh, onStartAddCampus, onSaveCampus, onCancelCampus,
   onCampusClick, onStartAddBuilding, onSaveBuilding, onCancelBuilding, onBuildingClick,
   onRenameCampus, onDeleteCampus, onRenameBuilding, onDeleteBuilding,
-  activeView, onOpenFieldAssets, onOpenReviews, onOpenIncidents,
+  activeView, onOpenFieldAssets, onOpenReviews, onOpenIncidents, showToast,
 }) {
   return (
     <div className="w-72 bg-slate-900 text-slate-300 flex flex-col shadow-xl z-10 shrink-0">
@@ -20,20 +20,8 @@ export default function Sidebar({
         <button onClick={onLogout} className="p-2 hover:bg-slate-800 rounded-lg text-slate-500 hover:text-red-400" title="로그아웃"><LogOut size={20} /></button>
       </div>
       <div className="overflow-y-auto flex-1 p-3">
-        <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-widest">Field</div>
-        <button onClick={onOpenFieldAssets} className={`w-full flex items-center p-2 rounded mb-1 text-left ${activeView === 'field' ? 'bg-orange-500/20 text-orange-300 font-medium' : 'hover:bg-slate-800'}`}>
-          <MapPin size={18} className={`mr-2 shrink-0 ${activeView === 'field' ? 'text-orange-400' : 'text-slate-500'}`} />
-          <span className="truncate">서버 현황</span>
-        </button>
-        <button onClick={onOpenIncidents} className={`w-full flex items-center p-2 rounded mb-4 text-left ${activeView === 'incidents' ? 'bg-red-500/20 text-red-300 font-medium' : 'hover:bg-slate-800'}`}>
-          <AlertTriangle size={18} className={`mr-2 shrink-0 ${activeView === 'incidents' ? 'text-red-400' : 'text-slate-500'}`} />
-          <span className="truncate">장애·유지보수 보고</span>
-        </button>
-        <div className="text-xs font-semibold text-slate-500 mb-2 px-2 uppercase tracking-widest">Docs</div>
-        <button onClick={onOpenReviews} className={`w-full flex items-center p-2 rounded mb-4 text-left ${activeView === 'reviews' ? 'bg-violet-500/20 text-violet-300 font-medium' : 'hover:bg-slate-800'}`}>
-          <FileText size={18} className={`mr-2 shrink-0 ${activeView === 'reviews' ? 'text-violet-400' : 'text-slate-500'}`} />
-          <span className="truncate">투자심의 자료</span>
-        </button>
+        <SidebarMenu activeView={activeView} showToast={showToast}
+          onOpen={(key) => ({ field: onOpenFieldAssets, incidents: onOpenIncidents, reviews: onOpenReviews }[key]?.())} />
         <div className="text-xs font-semibold text-slate-500 mb-3 px-2 uppercase tracking-widest flex justify-between items-center">
           <span>Site Topology</span>
           <div className="flex items-center gap-1.5">

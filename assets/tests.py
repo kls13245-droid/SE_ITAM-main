@@ -550,3 +550,17 @@ class FieldAssetBulkTest(BaseTest):
         self.a.refresh_from_db()
         self.assertEqual(self.a.status, '가동')
         self.assertFalse(PMRecord.objects.exists())
+
+
+class SidebarLayoutTest(BaseTest):
+    def test_save_and_reset(self):
+        self.assertIsNone(self.c.get('/api/me/sidebar/').json()['layout'])
+        layout = {'groups': [{'name': ' 현장 ', 'items': ['field', 'incidents', 'field']}, {'name': '문서', 'items': ['reviews']}]}
+        r = self.put('/api/me/sidebar/', {'layout': layout})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['layout']['groups'][0], {'name': '현장', 'items': ['field', 'incidents']})
+        self.assertEqual(self.c.get('/api/me/sidebar/').json()['layout']['groups'][1]['name'], '문서')
+        self.assertEqual(self.put('/api/me/sidebar/', {'layout': {'groups': 'x'}}).status_code, 400)
+        r = self.c.delete('/api/me/sidebar/', HTTP_X_CSRFTOKEN=self.token)
+        self.assertIsNone(r.json()['layout'])
+        self.assertEqual(Client().get('/api/me/sidebar/').status_code, 401)
