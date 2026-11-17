@@ -217,13 +217,30 @@ def baseline(request):
     if request.method == 'PUT':
         data = body(request)
         year = int(data.get('year') or timezone.localdate().year)
-        for kind, value in (data.get('values') or {}).items():
+        values = data.get('values') or {}
+        for kind, value in values.items():
             if kind not in KINDS:
                 raise ValidationError(f'알 수 없는 유형: {kind}')
-            n = int(value or 0)
-            if n < 0:
-                raise ValidationError('이전 완료 건수는 0 이상이어야 합니다.')
-            ReportBaseline.objects.update_or_create(year=year, kind=kind, defaults={'done_before': n})
+        with transaction.atomic():
+            for kind, value in values.items():
+                if isinstance(value, dict):
+                    # 표에 보일 숫자를 직접 입력: {in_progress, done, waiting}
+                    nums = []
+                    for key, label in (('in_progress', '진행 중'), ('done', '완료'), ('waiting', '보류 및 대기')):
+                        try:
+                            n = int(value.get(key) or 0)
+                        except (TypeError, ValueError):
+                            raise ValidationError(f'{KINDS[kind]} {label}: 숫자를 입력해 주세요.')
+                        if n < 0:
+                            raise ValidationError(f'{KINDS[kind]} {label}: 0 이상이어야 합니다.')
+                        nums.append(n)
+                    report.set_counts(year, kind, *nums)
+                else:
+                    # 예전 방식: ITAM 이전 완료 건수만
+                    n = int(value or 0)
+                    if n < 0:
+                        raise ValidationError('이전 완료 건수는 0 이상이어야 합니다.')
+                    ReportBaseline.objects.update_or_create(year=year, kind=kind, defaults={'done_before': n})
     else:
         year = int(request.GET.get('year') or timezone.localdate().year)
     return JsonResponse({'year': year, 'counts': report.counts(year)})

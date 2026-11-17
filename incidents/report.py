@@ -23,22 +23,36 @@ def week_label(day):
 # ---------------------------------------------------------------------------
 # 건수 표
 # ---------------------------------------------------------------------------
+def itam_counts(year, kind):
+    """ITAM에 입력된 건만으로 센 (진행 중, 완료, 보류 및 대기)"""
+    qs = Incident.objects.filter(kind=kind, occurred_on__year=year)
+    return (qs.filter(status='IN_PROGRESS').count(), qs.filter(status='DONE').count(),
+            qs.filter(status__in=['WAIT', 'HOLD']).count())
+
+
 def counts(year):
-    """유형별 [총 건수, 진행 중, 완료, 보류 및 대기]. ITAM 이전 완료 건수를 총 건수·완료에 더한다."""
-    base = {b.kind: b.done_before for b in ReportBaseline.objects.filter(year=year)}
+    """유형별 [총 건수, 진행 중, 완료, 보류 및 대기] = ITAM 건으로 센 값 + 보정값. 총 건수는 세 칸의 합."""
+    base = {b.kind: b for b in ReportBaseline.objects.filter(year=year)}
     rows = []
     for kind in KIND_ORDER:
-        qs = Incident.objects.filter(kind=kind, occurred_on__year=year)
-        in_progress = qs.filter(status='IN_PROGRESS').count()
-        done = qs.filter(status='DONE').count()
-        waiting = qs.filter(status__in=['WAIT', 'HOLD']).count()
-        before = base.get(kind, 0)
+        i, d, w = itam_counts(year, kind)
+        b = base.get(kind)
+        adj = (b.adj_in_progress, b.done_before, b.adj_waiting) if b else (0, 0, 0)
+        in_progress, done, waiting = (max(0, i + adj[0]), max(0, d + adj[1]), max(0, w + adj[2]))
         rows.append({
-            'kind': kind, 'label': KIND_LABEL[kind], 'baseline': before,
-            'total': before + in_progress + done + waiting,
-            'in_progress': in_progress, 'done': before + done, 'waiting': waiting,
+            'kind': kind, 'label': KIND_LABEL[kind], 'baseline': adj[1],
+            'total': in_progress + done + waiting, 'in_progress': in_progress, 'done': done, 'waiting': waiting,
+            'itam': {'in_progress': i, 'done': d, 'waiting': w},
+            'adjust': {'in_progress': adj[0], 'done': adj[1], 'waiting': adj[2]},
         })
     return rows
+
+
+def set_counts(year, kind, in_progress, done, waiting):
+    """표에 보일 숫자를 직접 정한다. ITAM 건으로 센 값과의 차이를 보정값으로 저장."""
+    i, d, w = itam_counts(year, kind)
+    ReportBaseline.objects.update_or_create(year=year, kind=kind, defaults={
+        'adj_in_progress': in_progress - i, 'done_before': done - d, 'adj_waiting': waiting - w})
 
 
 def table_markdown(year):

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, Plus, Search, FileText, Loader2, X, Save, Trash2, Pencil, ArrowUp, ArrowDown,
-  Copy, EyeOff, RefreshCw, Settings2,
+  Copy, EyeOff, RefreshCw,
 } from 'lucide-react';
 import { apiJson, jsonBody } from '../api/client';
 
@@ -57,26 +57,71 @@ function Modal({ title, onClose, children, wide }) {
   );
 }
 
-function CountsTable({ counts, year }) {
+const COUNT_COLS = [['in_progress', '진행 중'], ['done', '완료'], ['waiting', '보류 및 대기']];
+
+// 건수 표. '표 수정'을 누르면 칸을 직접 고칠 수 있다 (총 건수 = 세 칸의 합)
+function CountsTable({ counts, year, onSaved, showToast }) {
+  const [edit, setEdit] = useState(null); // {FAULT: {in_progress, done, waiting}, ...}
+  const [saving, setSaving] = useState(false);
+  const start = () => setEdit(Object.fromEntries(counts.map((r) => [r.kind, { in_progress: r.in_progress, done: r.done, waiting: r.waiting }])));
+  const setCell = (kind, key, v) => setEdit((e) => ({ ...e, [kind]: { ...e[kind], [key]: v } }));
+  const num = (v) => Math.max(0, parseInt(v, 10) || 0);
+  const save = () => {
+    setSaving(true);
+    const values = Object.fromEntries(Object.entries(edit).map(([k, v]) => [k, { in_progress: num(v.in_progress), done: num(v.done), waiting: num(v.waiting) }]));
+    apiJson('/api/incidents/baseline/', jsonBody('PUT', { year, values }))
+      .then(() => { showToast('건수 표를 저장했습니다.'); setEdit(null); onSaved(); })
+      .catch((err) => showToast(err.message, 'error'))
+      .finally(() => setSaving(false));
+  };
+  const adjusted = (r, key) => r.adjust?.[key] ? `ITAM 입력 ${r.itam[key]}건 ${r.adjust[key] > 0 ? '+' : ''}${r.adjust[key]} (직접 고친 값)` : '';
+
   return (
-    <table className="w-full text-sm border border-slate-200 rounded-lg overflow-hidden">
-      <thead className="bg-slate-50 text-slate-600">
-        <tr>
-          <th className="text-left px-3 py-2">{year}년 장애 및 유지보수</th>
-          <th className="px-3 py-2">총 건수</th><th className="px-3 py-2">진행 중</th>
-          <th className="px-3 py-2">완료</th><th className="px-3 py-2">보류 및 대기</th>
-        </tr>
-      </thead>
-      <tbody>
-        {counts.map((r) => (
-          <tr key={r.kind} className="border-t border-slate-100 text-center">
-            <td className="text-left px-3 py-2 font-medium">{r.label}</td>
-            <td className="px-3 py-2" title={r.baseline ? `ITAM 이전 완료 ${r.baseline}건 포함` : ''}>{r.total}</td>
-            <td className="px-3 py-2">{r.in_progress}</td><td className="px-3 py-2">{r.done}</td><td className="px-3 py-2">{r.waiting}</td>
+    <div>
+      <table className="w-full text-sm border border-slate-200 rounded-lg overflow-hidden">
+        <thead className="bg-slate-50 text-slate-600">
+          <tr>
+            <th className="text-left px-3 py-2">{year}년 장애 및 유지보수</th>
+            <th className="px-3 py-2">총 건수</th>
+            {COUNT_COLS.map(([k, label]) => <th key={k} className="px-3 py-2">{label}</th>)}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {counts.map((r) => {
+            const e = edit?.[r.kind];
+            return (
+              <tr key={r.kind} className="border-t border-slate-100 text-center">
+                <td className="text-left px-3 py-2 font-medium">{r.label}</td>
+                <td className="px-3 py-2 font-bold">{e ? COUNT_COLS.reduce((t, [k]) => t + num(e[k]), 0) : r.total}</td>
+                {COUNT_COLS.map(([k]) => (
+                  <td key={k} className="px-3 py-1.5" title={adjusted(r, k)}>
+                    {e ? (
+                      <input type="number" min="0" value={e[k]} onChange={(ev) => setCell(r.kind, k, ev.target.value)}
+                        className="w-20 border border-slate-300 rounded px-2 py-1 text-center text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                    ) : (
+                      <span className={r.adjust?.[k] ? 'border-b border-dotted border-slate-400 cursor-help' : ''}>{r[k]}</span>
+                    )}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="flex items-center justify-end gap-2 mt-2">
+        {edit ? (
+          <>
+            <span className="text-xs text-slate-500 mr-auto">고친 숫자와 ITAM에 입력된 건수의 차이가 보정값으로 저장됩니다. 나중에 건을 추가·완료하면 표도 그만큼 따라 바뀝니다.</span>
+            <button className={btnGhost} onClick={() => setEdit(null)}>취소</button>
+            <button className={btnPrimary} onClick={save} disabled={saving}>{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} 저장</button>
+          </>
+        ) : (
+          <button className="text-xs text-slate-500 hover:text-blue-600 inline-flex items-center gap-1" onClick={start} disabled={!counts.length}>
+            <Pencil size={12} /> 표 수정
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -261,32 +306,6 @@ function ReportTextPanel({ onClose, showToast }) {
 }
 
 // ---------------------------------------------------------------------------
-// ITAM 이전 완료 건수 (건수 표에 더함)
-// ---------------------------------------------------------------------------
-function BaselinePanel({ year, counts, onClose, onSaved, showToast }) {
-  const [values, setValues] = useState(Object.fromEntries(counts.map((r) => [r.kind, r.baseline])));
-  const save = () => apiJson('/api/incidents/baseline/', jsonBody('PUT', { year, values }))
-    .then(() => { showToast('저장했습니다.'); onSaved(); onClose(); })
-    .catch((err) => showToast(err.message, 'error'));
-  return (
-    <Modal title={`${year}년 ITAM 이전 완료 건수`} onClose={onClose}>
-      <p className="text-sm text-slate-600 mb-3">ITAM에 입력하지 않은, 올해 이미 끝난 건수입니다. 건수 표의 총 건수와 완료에 더해집니다.</p>
-      <div className="grid grid-cols-3 gap-3">
-        {counts.map((r) => (
-          <label key={r.kind} className="text-sm text-slate-600">{r.label}
-            <input type="number" min="0" className={input} value={values[r.kind] ?? 0} onChange={(e) => setValues({ ...values, [r.kind]: e.target.value })} />
-          </label>
-        ))}
-      </div>
-      <div className="flex justify-end gap-2 mt-5">
-        <button className={btnGhost} onClick={onClose}>취소</button>
-        <button className={btnPrimary} onClick={save}><Save size={14} /> 저장</button>
-      </div>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------------
 export default function IncidentReports({ showToast, askDelete }) {
   const [data, setData] = useState({ items: [], counts: [], year: new Date().getFullYear() });
   const [loading, setLoading] = useState(true);
@@ -296,7 +315,7 @@ export default function IncidentReports({ showToast, askDelete }) {
   const [q, setQ] = useState('');
   const [form, setForm] = useState(null);
   const [detailId, setDetailId] = useState(null);
-  const [panel, setPanel] = useState(null); // 'report' | 'baseline'
+  const [panel, setPanel] = useState(null); // 'report'
   const [fieldAssets, setFieldAssets] = useState([]);
 
   const load = () => {
@@ -327,12 +346,7 @@ export default function IncidentReports({ showToast, askDelete }) {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
-        <CountsTable counts={data.counts} year={data.year} />
-        <div className="flex justify-end mt-2">
-          <button className="text-xs text-slate-500 hover:text-blue-600 inline-flex items-center gap-1" onClick={() => setPanel('baseline')}>
-            <Settings2 size={12} /> ITAM 이전 완료 건수
-          </button>
-        </div>
+        <CountsTable counts={data.counts} year={data.year} onSaved={load} showToast={showToast} />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-3">
@@ -382,7 +396,6 @@ export default function IncidentReports({ showToast, askDelete }) {
       {detailId && !form && <IncidentDetail id={detailId} showToast={showToast} onClose={() => setDetailId(null)} onChanged={load}
         onEdit={(inc) => setForm({ ...EMPTY, ...inc, field_asset_id: inc.field_asset_id || '', done_on: inc.done_on || '' })} onDelete={del} />}
       {panel === 'report' && <ReportTextPanel showToast={showToast} onClose={() => setPanel(null)} />}
-      {panel === 'baseline' && <BaselinePanel year={data.year} counts={data.counts} showToast={showToast} onClose={() => setPanel(null)} onSaved={load} />}
     </div>
   );
 }
