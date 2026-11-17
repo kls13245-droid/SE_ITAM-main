@@ -218,7 +218,7 @@ class SpecCalcTest(TestCase):
         self.assertEqual(vm['usage'], 'Hypervisor')
         self.assertEqual((db['clock'], db['cores']), ('3.2', '8'))
         self.assertEqual(db['mem_total'], 128)
-        self.assertEqual(db['disk1_total'], 6.4)
+        self.assertEqual(db['disks'][0]['total'], 6.4)
         self.assertIsNone(db['guest'])
         self.assertEqual(vm['guest'], 5)
         # 베어메탈 Windows 1대, 코어 16 → 2Core당 1 = 8, 16Core당 1 = 1
@@ -276,11 +276,61 @@ class SpecCalcTest(TestCase):
         self.assertEqual([it['block'] for it in items], [it['block'] for it in SAMPLE_ITEMS])
         self.assertEqual(items[1]['data']['vm_win'], 3)
         self.assertEqual(items[1]['data']['sw'], {'mssql': 1})
-        self.assertEqual(items[0]['data']['disk1_unit'], 'TB')
+        self.assertEqual(items[0]['data']['disks'], [{'type': 'NVMe', 'size': 3.2, 'unit': 'TB', 'qty': 2}])
+        self.assertEqual(items[0]['data']['nics'], [{'model': '10G 2Port', 'qty': 2}])
+        self.assertEqual(items[0]['data']['gpus'], [])
         self.assertEqual(items[2]['data']['disks'][0], {'type': 'SSD', 'size': 800, 'unit': 'GB', 'count': 7, 'ratio': 0.5})
         self.assertEqual(items[3]['name'], '')         # 자동 장비명은 비워 둠
         # 만든 엑셀은 계산값만 있으므로 라이선스 수량 기준은 직접 입력으로 읽힌다
         self.assertEqual((items[5]['data']['basis'], items[5]['qty']), ('', 24))
+
+    def test_server_with_many_parts(self):
+        """디스크 3개·NIC 2개·GPU 2개 → 칸이 모자란 부품은 아래 행으로, PPT·비용 표·다시 불러오기 모두 반영"""
+        big = server('GPU-1', disks=[{'type': 'M.2', 'size': 480, 'unit': 'GB', 'qty': 2},
+                                     {'type': 'NVMe', 'size': 3.84, 'unit': 'TB', 'qty': 4},
+                                     {'type': 'SATA', 'size': 8, 'unit': 'TB', 'qty': 6}],
+                     hbas=[{'model': '32G 2Port', 'qty': 1}],
+                     nics=[{'model': '10G 2Port', 'qty': 1}, {'model': '25G 2Port', 'qty': 2}],
+                     gpus=[{'model': 'L40S', 'qty': 2}, {'model': 'A16', 'qty': 1}])
+        items = [big, SAMPLE_ITEMS[0]]
+        master = spec.Master({'Xeon Gold 5515': ('3.2', '8')}, {'code_SATA_8': 'Q-SATA8', 'code_L40S': 'Q-L40S',
+                                                                 'code_A16': 'Q-A16'})
+        calc = spec.compute(items, master)
+        self.assertEqual([d['total'] for d in calc['rows'][0]['disks']], [960, 15.36, 48])
+        self.assertEqual([g['code'] for g in calc['rows'][0]['gpus']], ['Q-L40S', 'Q-A16'])
+        wb = spec.build_workbook('AI', items, master)
+        buf = io.BytesIO()
+        wb.save(buf)
+        data = buf.getvalue()
+        vwb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+        ws = vwb['구매 사양']
+        self.assertEqual((ws['B4'].value, ws['R4'].value, ws['AA4'].value, ws['AC4'].value), (None, 'SATA', '25G 2Port', 'A16'))
+        self.assertEqual(ws['B5'].value, '서버')            # 다음 서버는 아래 행 다음부터
+        self.assertEqual(ws['G6'].value, 2)                 # 서버 소계
+        sh, cpu = make_ppt.Sheet(ws), make_ppt.CpuDB(vwb)
+        hw = [r['cells'] for b in make_ppt.build_HW(sh, cpu)[0] for r in b]
+        self.assertEqual(hw[0][4], '3.2GHz 8core * 2, DDR5 32 * 4, M.2 480GB * 2, NVMe 3.84TB * 4, 10G 2Port * 1, '
+                                   'L40S * 2, SATA 8TB * 6, 25G 2Port * 2, A16 * 1')
+        self.assertEqual([r[3] for r in hw], ['GPU-1', 'DB-A'])
+        cost = [r['cells'] for b in make_ppt.build_비용(sh, cpu)[0] for r in b]
+        gpu1 = [(r[3], r[4], r[5], r[8]) for r in cost if len(r) > 8 and r[3].endswith(('Disk', 'GPU'))][:5]
+        self.assertEqual(gpu1, [('R660 - Disk', 'M.2 480GB', '2', '확인필요'), ('R660 - Disk', 'NVMe 3.84TB', '4', '확인필요'),
+                                ('R660 - GPU', 'NVIDIA L40S', '2', 'Q-L40S'), ('R660 - Disk', 'SATA 8TB', '6', 'Q-SATA8'),
+                                ('R660 - GPU', 'NVIDIA A16', '1', 'Q-A16')])
+        back, warnings = spec.read_items(vwb, openpyxl.load_workbook(io.BytesIO(data)))
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(back), 2)
+        for key in ('disks', 'hbas', 'nics', 'gpus'):
+            self.assertEqual(back[0]['data'][key], big['data'][key], key)
+
+    def test_old_fixed_columns_are_converted(self):
+        old = {'os': 'Windows 2025', 'disk1_type': 'NVMe', 'disk1': 3.2, 'disk1_unit': 'TB', 'disk1_qty': 2,
+               'disk2_type': '', 'disk2': '', 'disk2_unit': 'GB', 'disk2_qty': '', 'hba': '', 'hba_qty': '',
+               'nic': '10G 2Port', 'nic_qty': 2, 'gpu': '', 'gpu_qty': ''}
+        d = spec.normalize_server(old)
+        self.assertEqual(d['disks'], [{'type': 'NVMe', 'size': 3.2, 'unit': 'TB', 'qty': 2}])
+        self.assertEqual((d['hbas'], d['nics'], d['gpus']), ([], [{'model': '10G 2Port', 'qty': 2}], []))
+        self.assertNotIn('disk1', d)
 
     def test_read_items_links_license_to_sw_subtotal(self):
         wb = openpyxl.Workbook()

@@ -364,6 +364,18 @@ def build_변경내용(sh):
     return [[x] for x in rows], {"vmerge": [(0, "group")]}
 
 
+def server_extra_rows(sh, r, cols):
+    """서버 r행 바로 아래에서 유형(B열)이 비어 있고 부품 칸(cols)에 값이 있는 행 번호 목록 (같은 서버의 추가 부품)"""
+    rows, nr, last = [], r + 1, sh.last_row(3)
+    while nr <= last and not str(sh.val(nr, 2) or "").strip():
+        if not sh.hidden(nr):
+            if not any(sh.txt(nr, c) not in ("", "-", "0") for c in cols):
+                break
+            rows.append(nr)
+        nr += 1
+    return rows
+
+
 # 반환: 장비 dict 목록. kind = server / storage / etc
 #   group이 None이면 HW_GROUP_SAME_SPEC 설정을, 값이 있으면 그 값을 '같은 사양 묶기' 여부로 사용
 def hw_items(sh, cpu_db, group=None):
@@ -400,18 +412,20 @@ def hw_items(sh, cpu_db, group=None):
                 parts.append(f"{speed}GHz {core}core * {sh.s(r, 13)}")
             # O열(15)부터 2행 헤더가 '구매 사양/종류/제품'인 열의 값을 사양으로 사용 (HBA 열 제외)
             #   바로 왼쪽 열 헤더가 TYPE이면 그 값을 앞에 붙이고, 바로 오른쪽 열 헤더가 수량이면 ' * 수량'을 붙임
-            for c in range(15, last_col + 1):
-                if h1.get(c, "").upper() == "HBA" or h2.get(c) not in ("구매 사양", "종류", "제품"):
-                    continue
-                spec = sh.txt(r, c)
-                if not spec or spec == "-":
-                    continue
-                if h2.get(c - 1, "").upper() == "TYPE":
-                    t = sh.txt(r, c - 1)
-                    if t and t != "-":
-                        spec = f"{t} {spec}"
-                q = sh.txt(r, c + 1) if h2.get(c + 1) == "수량" else ""
-                parts.append(f"{spec} * {q}" if q not in ("", "0", "-") else spec)
+            #   아래 행(유형 칸 빈칸)에 이어서 적힌 추가 부품(디스크·NIC·GPU 등)도 같은 서버 사양에 붙임
+            spec_cols = [c for c in range(15, last_col + 1)
+                         if h1.get(c, "").upper() != "HBA" and h2.get(c) in ("구매 사양", "종류", "제품")]
+            for rr in [r] + server_extra_rows(sh, r, spec_cols):
+                for c in spec_cols:
+                    spec = sh.txt(rr, c)
+                    if not spec or spec == "-":
+                        continue
+                    if h2.get(c - 1, "").upper() == "TYPE":
+                        t = sh.txt(rr, c - 1)
+                        if t and t != "-":
+                            spec = f"{t} {spec}"
+                    q = sh.txt(rr, c + 1) if h2.get(c + 1) == "수량" else ""
+                    parts.append(f"{spec} * {q}" if q not in ("", "0", "-") else spec)
             spec_str = ", ".join(parts)
 
         elif ("스토리지" in t_type or "STORAGE" in t_type) and "SWITCH" not in t_type and "스위치" not in t_type:
@@ -555,43 +569,34 @@ def build_비용(sh, cpu_db):
                             f"{sh.txt(r, 10)} ({core}Core {speed}Ghz)" if sh.txt(r, 10) else "-",
                             sh.txt(r, 13), code(r, "cpu")))
             # O열부터 첫 CIS 열 앞까지 부품 사양 열을 읽어 1행 대분류(MEMORY/DISK/GPU)에 따라 줄 추가
-            #   두 번째 디스크 열은 DISK2 CIS, 나머지는 DISK1 CIS 사용
-            disk_idx, first_disk = 0, 0
-            for c in range(15, first_cis):
-                if h1.get(c, "").upper() == "HBA" or h2.get(c) not in ("구매 사양", "종류", "제품"):
-                    continue
-                spec = sh.txt(r, c)
-                if not spec or spec == "-":
-                    continue
-                if h2.get(c - 1, "").upper() == "TYPE":
-                    t = sh.txt(r, c - 1)
-                    if t and t != "-":
-                        spec = f"{t} {spec}"
-                q = sh.txt(r, c + 1) or "1"
-                g = h1.get(c, "").upper()
-                if "MEMORY" in g:
-                    buf.append(item("HW", eq, manuf, f"{model} - Memory", spec, q, code(r, "ram")))
-                elif "DISK" in g:
-                    disk_idx += 1
-                    first_disk = first_disk or c
-                    buf.append(item("HW", eq, manuf, f"{model} - Disk", spec, q,
-                                    code(r, "disk2" if disk_idx == 2 else "disk1")))
-                elif "GPU" in g:
-                    buf.append(item("HW", eq, manuf, f"{model} - GPU", f"NVIDIA {spec}", q, code(r, "gpu")))
-            # 아래 행(B열 빈칸)에 이어서 적힌 추가 디스크도 같은 서버의 Disk 줄로 추가
-            if first_disk:
-                nr = r + 1
-                while not str(sh.val(nr, 2) or "").strip() and sh.txt(nr, first_disk):
-                    spec = sh.txt(nr, first_disk)
-                    if h2.get(first_disk - 1, "").upper() == "TYPE":
-                        t = sh.txt(nr, first_disk - 1)
+            #   행마다 두 번째 디스크 열은 DISK2 CIS, 나머지는 DISK1 CIS 사용
+            #   아래 행(유형 칸 빈칸)에 이어서 적힌 추가 부품도 같은 서버의 줄로 추가
+            part_cols = [c for c in range(15, first_cis)
+                         if h1.get(c, "").upper() != "HBA" and h2.get(c) in ("구매 사양", "종류", "제품")]
+            extra_rows = server_extra_rows(sh, r, part_cols)
+            for rr in [r] + extra_rows:
+                disk_idx = 0
+                for c in part_cols:
+                    g = h1.get(c, "").upper()
+                    if "DISK" in g:
+                        disk_idx += 1
+                    spec = sh.txt(rr, c)
+                    if not spec or spec == "-":
+                        continue
+                    if h2.get(c - 1, "").upper() == "TYPE":
+                        t = sh.txt(rr, c - 1)
                         if t and t != "-":
                             spec = f"{t} {spec}"
-                    buf.append(item("HW", eq, manuf, f"{model} - Disk", spec,
-                                    sh.txt(nr, first_disk + 1) or "1", code(nr, "disk1")))
-                    nr += 1
-                if nr > r + 1:
-                    jump = nr - 1
+                    q = sh.txt(rr, c + 1) or "1"
+                    if "MEMORY" in g:
+                        buf.append(item("HW", eq, manuf, f"{model} - Memory", spec, q, code(rr, "ram")))
+                    elif "DISK" in g:
+                        buf.append(item("HW", eq, manuf, f"{model} - Disk", spec, q,
+                                        code(rr, "disk2" if disk_idx == 2 else "disk1")))
+                    elif "GPU" in g:
+                        buf.append(item("HW", eq, manuf, f"{model} - GPU", f"NVIDIA {spec}", q, code(rr, "gpu")))
+            if extra_rows:
+                jump = extra_rows[-1]
             buf.append(item("HW", eq, manuf, f"{model} - Service", "WARRANTY 5yr", "1", code(r, "war")))
 
         elif ("스토리지" in t_type or "STORAGE" in t_type) and "SWITCH" not in t_type:

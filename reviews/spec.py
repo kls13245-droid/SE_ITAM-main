@@ -158,8 +158,47 @@ def _mul(a, b):
     return clean_num(a * b) if a is not None and b is not None else None
 
 
+# 서버 부품: 디스크·HBA·NIC·GPU는 줄마다 필요한 만큼 넣는다 (예전 Disk1·Disk2 고정 칸 형식도 읽음)
+PART_FIELDS = {'disks': ('type', 'size', 'unit', 'qty'), 'hbas': ('model', 'qty'), 'nics': ('model', 'qty'),
+               'gpus': ('model', 'qty')}
+_OLD_PART = {'hbas': 'hba', 'nics': 'nic', 'gpus': 'gpu'}
+SERVER_KEYS = ('os', 'cpu', 'cpu_qty', 'mem', 'mem_qty', 'vm_win', 'vm_linux', 'core')
+MAX_PARTS = 20
+
+
+def _filled(part):
+    return any(text(v) for v in part.values())
+
+
+def server_parts(d):
+    """서버 사양(JSON)에서 부품 목록 {'disks': [...], 'hbas': [...], 'nics': [...], 'gpus': [...]}"""
+    d = d or {}
+    out = {}
+    for key, fields in PART_FIELDS.items():
+        if isinstance(d.get(key), list):
+            parts = [{f: p.get(f, '') for f in fields} for p in d[key] if isinstance(p, dict)]
+        elif key == 'disks':
+            parts = [{'type': d.get(f'disk{n}_type') or '', 'size': d.get(f'disk{n}', ''),
+                      'unit': d.get(f'disk{n}_unit') or '', 'qty': d.get(f'disk{n}_qty', '')} for n in (1, 2)]
+        else:
+            old = _OLD_PART[key]
+            parts = [{'model': d.get(old) or '', 'qty': d.get(f'{old}_qty', '')}]
+        out[key] = [p for p in parts if _filled({k: v for k, v in p.items() if k != 'unit'})][:MAX_PARTS]
+    return out
+
+
+def normalize_server(d):
+    """예전 형식(disk1·hba 등 고정 칸)을 부품 목록 형식으로 바꾼다"""
+    d = d or {}
+    out = {k: d.get(k, '') for k in SERVER_KEYS}
+    out['sw'] = d.get('sw') if isinstance(d.get('sw'), dict) else {}
+    out.update(server_parts(d))
+    return out
+
+
 def server_calc(item, master):
     d = item.get('data') or {}
+    parts = server_parts(d)
     os_name = d.get('os') or ''
     is_vm = 'VSPHERE' in os_name.upper()
     spec = master.cpu(d.get('cpu'))
@@ -184,17 +223,17 @@ def server_calc(item, master):
         'vm': is_vm,
         'clock': text(clock) or '-', 'cores': text(cores) or '-',
         'mem_total': clean_num(mem_gb * num(d.get('mem_qty'))) if mem_gb is not None and num(d.get('mem_qty')) is not None else None,
-        'disk1_total': _mul(d.get('disk1'), d.get('disk1_qty')),
-        'disk2_total': _mul(d.get('disk2'), d.get('disk2_qty')),
+        'disks': [{'total': _mul(p.get('size'), p.get('qty')),
+                   'code': master.code(_disk_key(p.get('type'), p.get('size'))) if p.get('type') else ''}
+                  for p in parts['disks']],
+        'gpus': [{'code': master.code(_code_key(text(p.get('model')), ' .-')) if text(p.get('model')) else ''}
+                 for p in parts['gpus']],
         'guest': guest,
         'sw': {k: clean_num(v) for k, v in sw.items()},
         'codes': {
             'svr': master.code(_code_key((item.get('model') or '').strip(), ' .-(')) if item.get('model') else '',
             'cpu': master.code(_code_key(d.get('cpu') or '', ' .-')) if d.get('cpu') else '',
             'ram': master.code(_code_key(d.get('mem') or '', ' .-')) if d.get('mem') else '',
-            'disk1': master.code(_disk_key(d.get('disk1_type'), d.get('disk1'))) if d.get('disk1_type') else '',
-            'disk2': master.code(_disk_key(d.get('disk2_type'), d.get('disk2'))) if d.get('disk2_type') else '',
-            'gpu': master.code(_code_key(d.get('gpu') or '', ' .-')) if d.get('gpu') else '',
             'war': master.code(f"code_{item.get('maker')}서버_WAR") if item.get('maker') else '',
         },
     }
@@ -358,28 +397,43 @@ def build_workbook(case_title, items, master=None, cpus=None):
     start = r
     for it in servers:
         d, c = it.get('data') or {}, calc_of[id(it)]
+        parts = server_parts(d)
         vals = {
             'B': '서버', 'C': it.get('name'), 'D': it.get('usage') or c['usage'], 'E': it.get('maker'),
             'F': it.get('model'), 'G': clean_num(num(it.get('qty'))), 'H': c['guest'], 'I': d.get('os'),
             'J': d.get('cpu'), 'K': c['clock'] if d.get('cpu') else None, 'L': c['cores'] if d.get('cpu') else None,
             'M': clean_num(num(d.get('cpu_qty'))), 'O': d.get('mem'), 'P': clean_num(num(d.get('mem_qty'))),
-            'R': d.get('disk1_type'), 'T': clean_num(num(d.get('disk1_qty'))),
-            'V': d.get('disk2_type'), 'X': clean_num(num(d.get('disk2_qty'))),
-            'Y': d.get('hba'), 'Z': clean_num(num(d.get('hba_qty'))), 'AA': d.get('nic'), 'AB': clean_num(num(d.get('nic_qty'))),
-            'AC': d.get('gpu'), 'AD': clean_num(num(d.get('gpu_qty'))), 'AE': it.get('note'),
-            'AF': c['codes']['svr'], 'AG': c['codes']['cpu'], 'AH': c['codes']['ram'], 'AI': c['codes']['disk1'],
-            'AJ': c['codes']['disk2'], 'AK': c['codes']['gpu'], 'AL': c['codes']['war'],
+            'AE': it.get('note'), 'AF': c['codes']['svr'], 'AG': c['codes']['cpu'], 'AH': c['codes']['ram'],
+            'AL': c['codes']['war'],
         }
         for col, v in vals.items():
             _put(ws, f'{col}{r}', v)
         _put(ws, f'N{r}', c['mem_total'], 'GB')
-        for n, (tot, size) in enumerate((('Q', 'S'), ('U', 'W')), 1):
-            unit = d.get(f'disk{n}_unit') or ''
-            _put(ws, f'{tot}{r}', c[f'disk{n}_total'], unit)
-            _put(ws, f'{size}{r}', clean_num(num(d.get(f'disk{n}'))), unit)
-        _style_row(ws, r, last_col)
+        # 부품이 칸(Disk 2개, HBA·NIC·GPU 1개)보다 많으면 아래 행(유형 칸 비움)에 이어서 적는다
+        #   PPT 엔진은 유형이 빈 아래 행을 같은 서버의 추가 부품으로 읽는다
+        n_rows = max(1, math.ceil(len(parts['disks']) / 2), len(parts['hbas']), len(parts['nics']), len(parts['gpus']))
+        for j in range(n_rows):
+            rr = r + j
+            for slot, (tot, typ, size, qty, code) in enumerate((('Q', 'R', 'S', 'T', 'AI'), ('U', 'V', 'W', 'X', 'AJ'))):
+                i = 2 * j + slot
+                if i >= len(parts['disks']):
+                    continue
+                p, pc = parts['disks'][i], c['disks'][i]
+                unit = p.get('unit') or ''
+                _put(ws, f'{tot}{rr}', pc['total'], unit)
+                _put(ws, f'{typ}{rr}', p.get('type'))
+                _put(ws, f'{size}{rr}', clean_num(num(p.get('size'))), unit)
+                _put(ws, f'{qty}{rr}', clean_num(num(p.get('qty'))))
+                _put(ws, f'{code}{rr}', pc['code'])
+            for key, col, qcol in (('hbas', 'Y', 'Z'), ('nics', 'AA', 'AB'), ('gpus', 'AC', 'AD')):
+                if j < len(parts[key]):
+                    _put(ws, f'{col}{rr}', text(parts[key][j].get('model')) or None)
+                    _put(ws, f'{qcol}{rr}', clean_num(num(parts[key][j].get('qty'))))
+            if j < len(parts['gpus']):
+                _put(ws, f'AK{rr}', c['gpus'][j]['code'])
+            _style_row(ws, rr, last_col)
         sw_rows.append((it, c))
-        r += 1
+        r += n_rows
     if servers:
         block_label(start, r - 1, case_title)
     ws[f'B{r}'] = '서버 소계'
@@ -574,7 +628,7 @@ def read_items(values_wb, formulas_wb=None):
     def raw(r, col):
         return ws.cell(r, column_index_from_string(col) + off).value
 
-    items, warnings, block, last_storage = [], [], 'server', None
+    items, warnings, block, last_storage, last_server = [], [], 'server', None, None
     sw_total_row = _sw_total_row(values_wb)
     for r in range(3, ws.max_row + 1):
         if ws.row_dimensions[r].hidden:
@@ -591,6 +645,11 @@ def read_items(values_wb, formulas_wb=None):
             # 스토리지 아래 줄: 같은 스토리지의 추가 디스크
             if block == 'storage' and last_storage is not None and (v(r, 'H') or v(r, 'J') != ''):
                 last_storage['data']['disks'].append(_storage_disk(v, r, ws.cell(r, column_index_from_string('J') + off)))
+            # 서버 아래 줄: 같은 서버의 추가 디스크·HBA·NIC·GPU
+            elif block == 'server' and last_server is not None:
+                more = server_parts(_server_cols(v, ws, r, off))
+                for key in PART_FIELDS:
+                    last_server['data'][key] = (last_server['data'][key] + more[key])[:MAX_PARTS]
             continue
         if block == 'server' and b not in ('서버', 'SERVER', 'Server'):
             # 업무 칸이 비어 있는 다른 구역 (예: 업무명 없이 바로 License)
@@ -602,10 +661,8 @@ def read_items(values_wb, formulas_wb=None):
               'qty': num(raw(r, 'G')), 'note': text(v(r, 'AE')), 'data': {}}
         if block == 'server':
             it['kind'] = '서버'
-            it['data'] = {k: v(r, col) for k, col in SERVER_COLS.items()}
-            it['data']['disk1_unit'] = _unit_of(ws.cell(r, column_index_from_string('S') + off), 'TB')
-            it['data']['disk2_unit'] = _unit_of(ws.cell(r, column_index_from_string('W') + off), 'GB')
-            it['data']['sw'] = {}
+            it['data'] = normalize_server(_server_cols(v, ws, r, off))
+            last_server = it
         elif block == 'storage':
             it['kind'] = '스토리지'
             it['usage'] = text(v(r, 'D'))
@@ -635,6 +692,13 @@ def read_items(values_wb, formulas_wb=None):
 
     _read_sw_sheet(values_wb, items, warnings)
     return items, warnings
+
+
+def _server_cols(v, ws, r, off):
+    d = {k: v(r, col) for k, col in SERVER_COLS.items()}
+    d['disk1_unit'] = _unit_of(ws.cell(r, column_index_from_string('S') + off), 'TB')
+    d['disk2_unit'] = _unit_of(ws.cell(r, column_index_from_string('W') + off), 'GB')
+    return d
 
 
 def _sw_total_row(wb):

@@ -249,7 +249,8 @@ MAX_ITEMS = 300
 
 def item_dict(o):
     return {'id': o.id, 'block': o.block, 'kind': o.kind, 'name': o.name, 'usage': o.usage, 'maker': o.maker,
-            'model': o.model, 'qty': spec.clean_num(o.qty), 'note': o.note, 'data': o.data or {}}
+            'model': o.model, 'qty': spec.clean_num(o.qty), 'note': o.note,
+            'data': spec.normalize_server(o.data) if o.block == 'server' else (o.data or {})}
 
 
 def case_items(case):
@@ -269,10 +270,11 @@ def _clean_data(block, data):
         return str(v).strip()[:200]
 
     if block == 'server':
-        keys = list(spec.SERVER_COLS) + ['disk1_unit', 'disk2_unit', 'vm_win', 'vm_linux', 'core']
-        out = {k: val(data.get(k)) for k in keys}
+        out = {k: val(data.get(k)) for k in spec.SERVER_KEYS}
         sw = data.get('sw') if isinstance(data.get('sw'), dict) else {}
         out['sw'] = {k: val(v) for k, v in sw.items() if k in spec.SW_BY_KEY and val(v) not in ('', 0)}
+        for key, parts in spec.server_parts(data).items():
+            out[key] = [{f: val(p.get(f)) for f in spec.PART_FIELDS[key]} for p in parts]
         return out
     if block == 'storage':
         disks = data.get('disks') if isinstance(data.get('disks'), list) else []

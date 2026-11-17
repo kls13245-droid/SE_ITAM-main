@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Plus, Copy, Trash2, ArrowUp, ArrowDown, Save, Loader2, Upload, Download, AlertTriangle, Calculator } from 'lucide-react';
+import { Plus, X, Copy, Trash2, ArrowUp, ArrowDown, Save, Loader2, Upload, Download, AlertTriangle, Calculator } from 'lucide-react';
 import { apiJson, jsonBody, API_BASE_URL } from '../api/client';
 
 /*
@@ -13,14 +13,20 @@ const newKey = () => `k${++seq}`;
 const withKeys = (items) => items.map(it => ({ ...it, _k: newKey() }));
 const strip = (items) => items.map(({ _k, ...it }) => it); // eslint-disable-line no-unused-vars
 const clone = (v) => JSON.parse(JSON.stringify(v));
-const us = (s) => String(s || '').trim().replace(/ /g, '_');
+// 모델명 → 이름 관리자 이름 조각 (예: DL380 Gen10+ → DL380_Gen10Plus, 엑셀 이름 규칙과 같음)
+const us = (s) => String(s || '').trim().replace(/ /g, '_').replace(/\+/g, 'Plus');
 
 const BLOCKS = [
   ['server', '서버'], ['storage', '스토리지'], ['etc', 'ETC (SAN·Rack·KVM)'], ['nw', 'NW (스위치)'], ['license', 'License'],
 ];
+// 서버 부품 (디스크·HBA·NIC·GPU는 서버마다 필요한 만큼 추가·삭제)
+const blankPart = {
+  disks: () => ({ type: '', size: '', unit: 'TB', qty: '' }),
+  hbas: () => ({ model: '', qty: '' }), nics: () => ({ model: '', qty: '' }), gpus: () => ({ model: '', qty: '' }),
+};
 const BLANK = {
   server: () => ({ block: 'server', kind: '서버', name: '', usage: '', maker: '', model: '', qty: 1, note: '',
-    data: { cpu_qty: 1, mem_qty: 1, disk1_unit: 'TB', disk2_unit: 'GB', sw: {} } }),
+    data: { cpu_qty: 1, mem_qty: 1, disks: [blankPart.disks()], hbas: [], nics: [blankPart.nics()], gpus: [], sw: {} } }),
   storage: () => ({ block: 'storage', kind: '스토리지', name: '', usage: '', maker: '', model: '', qty: 1, note: '',
     data: { disks: [{ type: '', size: '', unit: 'TB', count: '', ratio: '' }] } }),
   etc: () => ({ block: 'etc', kind: 'SAN', name: '', usage: '', maker: '', model: '', qty: 1, note: '', data: { spec: '' } }),
@@ -52,6 +58,7 @@ const btnGhost = `${btn} bg-white border-slate-200 text-slate-600 hover:bg-slate
 const btnPrimary = `${btn} bg-blue-600 border-blue-600 text-white hover:bg-blue-700`;
 const th = 'px-1.5 py-1.5 text-[11px] font-bold text-slate-500 whitespace-nowrap text-left';
 const td = 'px-1 py-1 align-middle';
+const tdTop = 'px-1 py-1 align-top';
 const fmt = (v) => (v === null || v === undefined || v === '' ? '-' : String(v));
 
 // 입력칸·표 조각 (컴포넌트 밖에 두어야 입력할 때 칸이 다시 만들어지지 않아 커서가 유지된다)
@@ -59,7 +66,7 @@ function Inp({ v, on, w = 'w-24', ph }) {
   return <input className={`${cellCls} ${w}`} value={v ?? ''} placeholder={ph} onChange={e => on(e.target.value)} />;
 }
 // 기준정보 목록에서만 고르는 칸. 목록에 없는 값은 '목록에 추가'로 기준정보에 넣은 뒤 고른다
-function Sel({ v, on, names, lists, onAdd, w = 'w-28', needs }) {
+function Sel({ v, on, names, lists, onAdd, w = 'w-28', needs, addTo }) {
   if (!names) {
     return <select disabled className={`${cellCls} ${w} text-slate-400`}><option>{needs || '-'}</option></select>;
   }
@@ -70,7 +77,7 @@ function Sel({ v, on, names, lists, onAdd, w = 'w-28', needs }) {
   return (
     <select className={`${cellCls} ${w} ${missing ? 'border-amber-400 bg-amber-50 text-amber-800' : ''} ${value ? '' : 'text-slate-400'}`}
       value={value} title={missing ? '기준정보 목록에 없는 값입니다. 목록에서 다시 고르거나 목록에 추가해 주세요.' : value}
-      onChange={e => (e.target.value === ADD ? onAdd(keys[0] || names[0], on) : on(e.target.value))}>
+      onChange={e => (e.target.value === ADD ? onAdd(addTo || keys[0] || names[0], on) : on(e.target.value))}>
       <option value="">선택</option>
       {missing && <option value={value}>⚠ {value} (목록에 없음)</option>}
       {options.map(o => <option key={o} value={o} className="text-slate-800">{o}</option>)}
@@ -112,6 +119,24 @@ function AddModal({ req, onClose, onDone }) {
           <button disabled={busy || !value.trim()} className={btnPrimary}>{busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} 추가하고 고르기</button>
         </div>
       </form>
+    </div>
+  );
+}
+// 서버 한 줄 안의 부품 목록 (줄마다 삭제, 아래 '＋'로 추가)
+function PartList({ parts, onChange, blank, label, children }) {
+  const list = Array.isArray(parts) ? parts : [];
+  const set = (i) => (f, v) => onChange(list.map((p, j) => (j === i ? { ...p, [f]: v } : p)));
+  return (
+    <div className="flex flex-col gap-1">
+      {list.map((p, i) => (
+        <div key={i} className="flex items-center gap-1">
+          {children(p, set(i))}
+          <button title={`${label} 빼기`} onClick={() => onChange(list.filter((_, j) => j !== i))}
+            className="p-0.5 text-slate-300 hover:text-red-600"><X size={12} /></button>
+        </div>
+      ))}
+      <button onClick={() => onChange([...list, blank()])}
+        className="text-[11px] text-blue-600 hover:text-blue-800 text-left whitespace-nowrap">＋ {label} 추가</button>
     </div>
   );
 }
@@ -297,9 +322,15 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
   };
 
   // 기준정보 목록에서 고르는 칸. names가 없으면(앞 칸을 아직 안 고름) needs 문구로 막아 둔다
-  const sel = (v, on, names, w, needs) => (
-    <Sel v={v} on={on} names={names} lists={lists} w={w} needs={needs} onAdd={(name, pick) => setAddReq({ name, on: pick })} />
+  const sel = (v, on, names, w, needs, addTo) => (
+    <Sel v={v} on={on} names={names} lists={lists} w={w} needs={needs} addTo={addTo} onAdd={(name, pick) => setAddReq({ name, on: pick })} />
   );
+  // GPU 목록: 모델별 목록(GPU_R760 등)이 있으면 그것, 없으면 모든 모델의 GPU 목록을 합쳐서 보여 준다
+  const gpuNames = (model) => {
+    if (!model) return null;
+    const own = findList(lists, `GPU_${us(model)}`);
+    return own ? [own] : Object.keys(lists).filter(n => n.startsWith('GPU_')).sort();
+  };
   const calcOf = useMemo(() => {
     const m = {};
     (items || []).forEach((it, i) => { m[it._k] = calc.rows?.[i] || {}; });
@@ -358,7 +389,7 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
         <table className="text-xs">
           <thead className="bg-white border-b border-slate-100"><tr>
             {['장비명', '제조사', '모델', '수량', 'OS', '장비 구분', 'CPU', '클럭 / 코어', 'CPU 수', '메모리', '수', 'Total',
-              'Disk1', '크기', '단위', '수', 'Disk2', '크기', '단위', '수', 'HBA', '수', 'NIC', '수', 'GPU', '수', '비고', ''].map((h, i) => <th key={i} className={th}>{h}</th>)}
+              'Disk (종류 · 크기 · 단위 · 수)', 'HBA (제품 · 수)', 'NIC (종류 · 수)', 'GPU (제품 · 수)', '비고', ''].map((h, i) => <th key={i} className={th}>{h}</th>)}
           </tr></thead>
           <tbody>
             {servers.map(it => {
@@ -378,21 +409,30 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
                   <td className={td}>{sel(d.mem, v => setData(k, 'mem', v), ['MEMORY'], 'w-28')}</td>
                   <td className={td}><Inp v={d.mem_qty} on={v => setData(k, 'mem_qty', v)} w="w-12" /></td>
                   <td className={td}><Auto>{cc.mem_total != null ? `${cc.mem_total}GB` : '-'}</Auto></td>
-                  {[1, 2].map(n => [
-                    <td key={`t${n}`} className={td}>{sel(d[`disk${n}_type`], v => setData(k, `disk${n}_type`, v), ['DiskType'], 'w-24')}</td>,
-                    <td key={`s${n}`} className={td}><Inp v={d[`disk${n}`]} on={v => setData(k, `disk${n}`, v)} w="w-14" /></td>,
-                    <td key={`u${n}`} className={td}>
-                      <select className={cellCls} value={d[`disk${n}_unit`] || ''} onChange={e => setData(k, `disk${n}_unit`, e.target.value)}>
-                        <option value="TB">TB</option><option value="GB">GB</option><option value="">-</option>
-                      </select></td>,
-                    <td key={`q${n}`} className={td}><Inp v={d[`disk${n}_qty`]} on={v => setData(k, `disk${n}_qty`, v)} w="w-12" /></td>,
-                  ])}
-                  <td className={td}>{sel(d.hba, v => setData(k, 'hba', v), ['HBA'], 'w-28')}</td>
-                  <td className={td}><Inp v={d.hba_qty} on={v => setData(k, 'hba_qty', v)} w="w-12" /></td>
-                  <td className={td}>{sel(d.nic, v => setData(k, 'nic', v), ['NIC'], 'w-28')}</td>
-                  <td className={td}><Inp v={d.nic_qty} on={v => setData(k, 'nic_qty', v)} w="w-12" /></td>
-                  <td className={td}>{sel(d.gpu, v => setData(k, 'gpu', v), it.model ? [`GPU_${us(it.model)}`] : null, 'w-28', '모델 먼저')}</td>
-                  <td className={td}><Inp v={d.gpu_qty} on={v => setData(k, 'gpu_qty', v)} w="w-12" /></td>
+                  <td className={tdTop}>
+                    <PartList parts={d.disks} onChange={v => setData(k, 'disks', v)} blank={blankPart.disks} label="Disk">
+                      {(p, set) => <>
+                        {sel(p.type, v => set('type', v), ['DiskType'], 'w-24')}
+                        <Inp v={p.size} on={v => set('size', v)} w="w-14" ph="크기" />
+                        <select className={cellCls} value={p.unit || ''} onChange={e => set('unit', e.target.value)}>
+                          <option value="TB">TB</option><option value="GB">GB</option><option value="">-</option>
+                        </select>
+                        <Inp v={p.qty} on={v => set('qty', v)} w="w-12" ph="수" />
+                      </>}
+                    </PartList></td>
+                  <td className={tdTop}>
+                    <PartList parts={d.hbas} onChange={v => setData(k, 'hbas', v)} blank={blankPart.hbas} label="HBA">
+                      {(p, set) => <>{sel(p.model, v => set('model', v), ['HBA'], 'w-28')}<Inp v={p.qty} on={v => set('qty', v)} w="w-12" ph="수" /></>}
+                    </PartList></td>
+                  <td className={tdTop}>
+                    <PartList parts={d.nics} onChange={v => setData(k, 'nics', v)} blank={blankPart.nics} label="NIC">
+                      {(p, set) => <>{sel(p.model, v => set('model', v), ['NIC'], 'w-28')}<Inp v={p.qty} on={v => set('qty', v)} w="w-12" ph="수" /></>}
+                    </PartList></td>
+                  <td className={tdTop}>
+                    <PartList parts={d.gpus} onChange={v => setData(k, 'gpus', v)} blank={blankPart.gpus} label="GPU">
+                      {(p, set) => <>{sel(p.model, v => set('model', v), gpuNames(it.model), 'w-28', '모델 먼저',
+                        it.model ? `GPU_${us(it.model)}` : null)}<Inp v={p.qty} on={v => set('qty', v)} w="w-12" ph="수" /></>}
+                    </PartList></td>
                   <td className={td}><Inp v={it.note} on={v => setField(k, 'note', v)} w="w-32" /></td>
                   <RowTools onMove={dir => move(it._k, dir)} onCopy={() => duplicate(it._k)} onRemove={() => remove(it._k)} />
                 </tr>
