@@ -98,8 +98,8 @@ class SpecItem(models.Model):
     """화면에서 입력한 구매 사양 한 줄 (엑셀 '구매 사양' 시트의 장비·라이선스 한 행)
 
     공통 칸(유형·장비명·제조사·모델·수량)은 열로 두고, 구역마다 다른 칸은 data(JSON)에 둔다.
-      서버    : os, cpu, cpu_qty, mem, mem_qty, disk1_type, disk1, disk1_qty, disk2_type, disk2, disk2_qty,
-                hba, hba_qty, nic, nic_qty, gpu, gpu_qty
+      서버    : os, cpu, cpu_qty, mem, mem_qty,
+                disks [{type, size, unit, qty}], hbas·nics·gpus [{model, qty}] (필요한 만큼. 예전 disk1·hba 등 고정 칸은 읽을 때 바꿈)
                 + SW-수량산정: vm_win, vm_linux, core, sw {제품 키: 수량 (직접 입력하는 제품)}
       스토리지: disks [{type, size, count, ratio}]
       ETC·NW  : spec
