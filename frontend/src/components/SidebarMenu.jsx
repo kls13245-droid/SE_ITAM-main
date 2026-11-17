@@ -52,7 +52,8 @@ export default function SidebarMenu({ activeView, onOpen, showToast }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    apiJson('/api/me/sidebar/').then(r => { if (r.layout) setLayout(normalize(r.layout)); }).catch(() => {});
+    apiJson('/api/me/sidebar/').then(r => { if (r.layout) setLayout(normalize(r.layout)); })
+      .catch(err => console.warn('사이드바 설정을 불러오지 못했습니다:', err.message));
   }, []);
 
   const notify = (msg, type) => showToast?.(msg, type);
@@ -117,8 +118,8 @@ export default function SidebarMenu({ activeView, onOpen, showToast }) {
           </>
         ) : (
           <button onClick={() => setDraft({ groups: layout.groups.map(g => ({ ...g, items: [...g.items] })) })}
-            className="p-1 text-slate-600 hover:text-slate-300 hover:bg-slate-800 rounded" title="사이드바 메뉴 편집 (그룹·순서)">
-            <Settings2 size={13} />
+            className="px-2 py-1 flex items-center gap-1 text-[11px] font-bold text-slate-400 hover:text-white hover:bg-slate-800 rounded" title="사이드바 메뉴 편집 (그룹·순서)">
+            <Settings2 size={13} /> 메뉴 편집
           </button>
         )}
       </div>
@@ -148,7 +149,7 @@ export default function SidebarMenu({ activeView, onOpen, showToast }) {
               const on = activeView === key;
               if (editing) {
                 return (
-                  <div key={key} draggable onDragStart={() => setDrag({ g: gi, i: ii })} onDragEnd={() => setDrag(null)}
+                  <div key={key} draggable onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', key); setDrag({ g: gi, i: ii }); }} onDragEnd={() => setDrag(null)}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => { e.preventDefault(); e.stopPropagation(); if (drag) moveItem(drag, { g: gi, i: ii }); setDrag(null); }}
                     className={`flex items-center p-1.5 rounded mb-0.5 bg-slate-800/70 cursor-grab select-none ${drag?.g === gi && drag?.i === ii ? 'opacity-40' : ''}`}>
