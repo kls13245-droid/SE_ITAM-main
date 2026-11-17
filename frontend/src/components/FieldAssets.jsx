@@ -8,6 +8,9 @@ import { apiJson, jsonBody, API_BASE_URL } from '../api/client';
 import FieldAssetForm, { PMRecordForm, PMRecordList } from './FieldAssetForm';
 import FieldAssetBulk from './FieldAssetBulk';
 import { PARTS, STATUS_STYLE } from './fieldAssetConstants';
+import '@fontsource/ibm-plex-sans-kr/400.css';
+import '@fontsource/ibm-plex-sans-kr/500.css';
+import '@fontsource/ibm-plex-sans-kr/600.css';
 
 // monday 'SE파트 - PM 현황' 보드 (항목 링크용)
 const MONDAY_ITEM_URL = 'https://mirero-company.monday.com/boards/9255835900/pulses/';
@@ -16,6 +19,18 @@ const IPMI_STYLE = { '접속 가능': 'text-emerald-600', '접속 불가': 'text
 const ATTENTION_STATUSES = ['확인 필요', 'Parts 교체 필요', '사용불가'];
 
 const faultParts = (a) => PARTS.filter(([k]) => a.health?.[k] === 'Fault').map(([, label]) => label);
+
+// 줄 왼쪽 상태 표시등 (랙 앞 LED처럼): 부품 Fault > 점검 필요·PM 미완료 > 미사용 > 정상
+const OFF_STATUSES = ['유휴 서버 전환', '폐기'];
+const ledOf = (a) => {
+  const faults = faultParts(a);
+  if (faults.length) return { color: '#D9362B', label: `부품 Fault: ${faults.join(', ')}` };
+  if (OFF_STATUSES.includes(a.status) || a.pm_status === '미사용') return { color: '#9AA5B1', label: '미사용' };
+  if (ATTENTION_STATUSES.includes(a.status)) return { color: '#E0A100', label: `점검 필요: ${a.status}` };
+  if (a.pm_status !== '완료') return { color: '#E0A100', label: 'PM 미완료' };
+  return { color: '#2F9E6E', label: '정상' };
+};
+const LED_LEGEND = [['#2F9E6E', '정상'], ['#E0A100', 'PM 미완료·점검 필요'], ['#D9362B', '부품 Fault'], ['#9AA5B1', '미사용']];
 
 const QUICK_FILTERS = {
   all: { label: '전체', icon: Server, test: () => true, tone: 'text-slate-800' },
@@ -262,7 +277,10 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
           </select>
         ))}
         {filtered && <button onClick={resetFilters} className="text-xs font-bold text-slate-500 hover:text-slate-800 px-2">필터 초기화</button>}
-        <span className="ml-auto text-xs text-slate-500"><b className="text-slate-800">{rows.length}</b> / {items.length}대</span>
+        <span className="ml-auto flex items-center gap-3 text-[11px] text-slate-500">
+          {LED_LEGEND.map(([c, label]) => <span key={label} className="inline-flex items-center gap-1"><span className="w-1.5 h-3 rounded-sm" style={{ background: c }} />{label}</span>)}
+        </span>
+        <span className="text-xs text-slate-500"><b className="text-slate-800">{rows.length}</b> / {items.length}대</span>
       </div>
 
       {/* 선택한 서버 한꺼번에 바꾸기 */}
@@ -287,14 +305,15 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
             <p className="text-sm mt-1">오른쪽 위 <b>등록 양식</b>을 받아 작성한 뒤 <b>CSV로 등록</b>으로 올리거나, <b>장비 추가</b>로 한 대씩 등록하세요.</p>
           </div>
         ) : (
-          <table className="w-full text-xs border-collapse">
+          <table className="w-full text-xs border-collapse" style={{ fontFamily: "'IBM Plex Sans KR', sans-serif" }}>
             <thead className="sticky top-0 z-10">
-              <tr className="bg-[#ddebf7] text-slate-800">
-                <th className="border-b border-r border-slate-300 px-2 py-2 w-8">
+              <tr className="bg-white text-slate-500">
+                <th className="border-b border-slate-200 px-2 py-2.5 w-8">
                   <input type="checkbox" checked={allRowsChecked} onChange={toggleAllRows} title="보이는 목록 전체 선택/해제" />
                 </th>
+                <th className="border-b border-slate-200 px-1 py-2.5 w-3"><span className="sr-only">상태 표시</span></th>
                 {COLUMNS.map(([k, label]) => (
-                  <th key={k} onClick={() => toggleSort(k)} className="border-b border-r border-slate-300 px-2 py-2 text-left font-bold whitespace-nowrap cursor-pointer select-none hover:bg-[#cfe2f3]">
+                  <th key={k} onClick={() => toggleSort(k)} className="border-b border-slate-200 px-2 py-2.5 text-left font-medium whitespace-nowrap cursor-pointer select-none hover:text-slate-800 hover:bg-slate-50">
                     <span className="inline-flex items-center">{label}
                       {sort.key === k && (sort.dir === 'asc' ? <ChevronUp size={12} className="ml-0.5" /> : <ChevronDown size={12} className="ml-0.5" />)}
                     </span>
@@ -305,11 +324,15 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
             <tbody>
               {rows.map(a => {
                 const faults = faultParts(a);
+                const led = ledOf(a);
                 return (
                   <tr key={a.id} onClick={() => setSelectedId(a.id)}
                     className={`cursor-pointer border-b border-slate-100 hover:bg-blue-50 ${selected?.id === a.id || checked.has(a.id) ? 'bg-blue-50' : ''}`}>
                     <td className="px-2 py-1.5" onClick={(e) => { e.stopPropagation(); toggleCheck(a.id); }}>
                       <input type="checkbox" checked={checked.has(a.id)} readOnly className="pointer-events-none" />
+                    </td>
+                    <td className="px-1 py-1.5" title={led.label}>
+                      <span className="block w-1.5 h-5 rounded-sm" style={{ background: led.color }} aria-label={led.label} role="img" />
                     </td>
                     <td className="px-2 py-1.5 font-mono font-bold text-blue-700 whitespace-nowrap">
                       {a.hostname}
@@ -337,7 +360,7 @@ export default function FieldAssets({ showToast, focusId, onFocusHandled, askDel
                   </tr>
                 );
               })}
-              {rows.length === 0 && <tr><td colSpan={COLUMNS.length + 1} className="p-8 text-center text-slate-400">조건에 맞는 장비가 없습니다.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={COLUMNS.length + 2} className="p-8 text-center text-slate-400">조건에 맞는 장비가 없습니다.</td></tr>}
             </tbody>
           </table>
         )}
