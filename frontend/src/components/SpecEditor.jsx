@@ -34,7 +34,16 @@ const SW_SHORT = {
 };
 // ETC 유형 → 선택 목록 이름의 가운데 부분 (엑셀 데이터 유효성 검사 수식과 같은 규칙)
 const etcGroup = (kind) => (/SAN/i.test(kind) ? '스위치' : /Rack/i.test(kind) ? 'Rack' : /KVM/i.test(kind) ? 'KVM' : '기타');
-const nwMakerList = (kind) => (/25G/i.test(kind) ? '제조사_25G스위치' : /(^|[^0-9])1G/i.test(kind) ? '제조사_1G스위치' : null);
+// NW 제조사 목록: 1G·25G는 기준정보에 따로 있고, 10G는 없으면 스위치 제조사 전체에서 고른다 (추가하면 제조사_10G스위치로)
+const nwMakerLists = (kind) => (/25G/i.test(kind) ? ['제조사_25G스위치'] : /(^|[^0-9])1G/i.test(kind) ? ['제조사_1G스위치']
+  : ['제조사_10G스위치', '제조사_25G스위치', '제조사_1G스위치']);
+const ADD = '__add__';
+// 이름 관리자 이름은 대소문자를 가리지 않는다 (예: 제조사_HyperVisor = 제조사_Hypervisor)
+const findList = (lists, name) => {
+  if (lists[name]) return name;
+  const low = name.toLowerCase();
+  return Object.keys(lists).find(n => n.toLowerCase() === low);
+};
 
 const cellCls = 'border border-slate-200 rounded px-1.5 py-1 text-xs outline-none focus:ring-2 focus:ring-blue-400 bg-white';
 const btn = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors disabled:opacity-50';
@@ -45,8 +54,65 @@ const td = 'px-1 py-1 align-middle';
 const fmt = (v) => (v === null || v === undefined || v === '' ? '-' : String(v));
 
 // 입력칸·표 조각 (컴포넌트 밖에 두어야 입력할 때 칸이 다시 만들어지지 않아 커서가 유지된다)
-function Inp({ v, on, listId, w = 'w-24', ph }) {
-  return <input className={`${cellCls} ${w}`} value={v ?? ''} list={listId} placeholder={ph} onChange={e => on(e.target.value)} />;
+function Inp({ v, on, w = 'w-24', ph }) {
+  return <input className={`${cellCls} ${w}`} value={v ?? ''} placeholder={ph} onChange={e => on(e.target.value)} />;
+}
+// 기준정보 목록에서만 고르는 칸. 목록에 없는 값은 '목록에 추가'로 기준정보에 넣은 뒤 고른다
+function Sel({ v, on, names, lists, onAdd, w = 'w-28', needs }) {
+  if (!names) {
+    return <select disabled className={`${cellCls} ${w} text-slate-400`}><option>{needs || '-'}</option></select>;
+  }
+  const keys = names.map(n => findList(lists, n)).filter(Boolean);
+  const options = [...new Set(keys.flatMap(n => lists[n] || []))];
+  const value = v == null ? '' : String(v);
+  const missing = value !== '' && !options.includes(value);
+  return (
+    <select className={`${cellCls} ${w} ${missing ? 'border-amber-400 bg-amber-50 text-amber-800' : ''} ${value ? '' : 'text-slate-400'}`}
+      value={value} title={missing ? '기준정보 목록에 없는 값입니다. 목록에서 다시 고르거나 목록에 추가해 주세요.' : value}
+      onChange={e => (e.target.value === ADD ? onAdd(keys[0] || names[0], on) : on(e.target.value))}>
+      <option value="">선택</option>
+      {missing && <option value={value}>⚠ {value} (목록에 없음)</option>}
+      {options.map(o => <option key={o} value={o} className="text-slate-800">{o}</option>)}
+      <option value={ADD} className="text-blue-600">＋ 목록에 추가…</option>
+    </select>
+  );
+}
+function AddModal({ req, onClose, onDone }) {
+  const [value, setValue] = useState('');
+  const [clock, setClock] = useState('');
+  const [cores, setCores] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const isCpu = req.name.startsWith('List_');
+  const submit = (e) => {
+    e.preventDefault();
+    setBusy(true); setErr('');
+    apiJson('/api/reviews/master/lists/add/', jsonBody('POST', { name: req.name, value, clock, cores }))
+      .then(l => onDone(l, value.trim()))
+      .catch(er => { setErr(er.message); setBusy(false); });
+  };
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={onClose}>
+      <form onSubmit={submit} onClick={e => e.stopPropagation()} className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-md space-y-3">
+        <div className="text-base font-bold text-slate-800">기준정보 목록에 추가</div>
+        <div className="text-xs text-slate-500">목록 <span className="font-mono text-slate-700">{req.name}</span>에 값을 더하고 이 칸에 넣습니다. 변경 이력이 남고, 다른 심의건에서도 이 값을 고를 수 있습니다.</div>
+        <label className="block text-sm text-slate-600">추가할 값
+          <input autoFocus className={`${cellCls} w-full text-sm py-2`} value={value} onChange={e => setValue(e.target.value)} placeholder="철자를 한 번 더 확인해 주세요" /></label>
+        {isCpu && (
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm text-slate-600">클럭 (GHz)<input className={`${cellCls} w-full text-sm py-2`} value={clock} onChange={e => setClock(e.target.value)} placeholder="예: 2.3" /></label>
+            <label className="block text-sm text-slate-600">코어 수<input className={`${cellCls} w-full text-sm py-2`} value={cores} onChange={e => setCores(e.target.value)} placeholder="예: 16" /></label>
+          </div>
+        )}
+        {err && <div className="text-xs text-red-600">{err}</div>}
+        <p className="text-[11px] text-amber-700">기준정보 탭에서 매크로 엑셀을 다시 가져오면 엑셀 기준으로 덮어써서, 여기서 추가한 값은 빠집니다. 매크로 엑셀에도 같이 넣어 두세요.</p>
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className={btnGhost}>취소</button>
+          <button disabled={busy || !value.trim()} className={btnPrimary}>{busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} 추가하고 고르기</button>
+        </div>
+      </form>
+    </div>
+  );
 }
 function Auto({ children, title }) {
   return <span title={title} className="text-xs text-slate-500 whitespace-nowrap">{children}</span>;
@@ -85,6 +151,7 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState('');
   const [warnings, setWarnings] = useState([]);
+  const [addReq, setAddReq] = useState(null); // { name, on }
   const calcTimer = useRef(null);
   const fileRef = useRef(null);
 
@@ -167,9 +234,10 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
       .catch(err => showToast(err.message, 'error')).finally(() => setBusy(''));
   };
 
-  // 기준정보 목록 → <datalist> (입력칸에 목록을 제안)
-  const listNames = useMemo(() => Object.keys(lists), [lists]);
-  const dl = (name) => (name && lists[name] ? `ml-${listNames.indexOf(name)}` : undefined);
+  // 기준정보 목록에서 고르는 칸. names가 없으면(앞 칸을 아직 안 고름) needs 문구로 막아 둔다
+  const sel = (v, on, names, w, needs) => (
+    <Sel v={v} on={on} names={names} lists={lists} w={w} needs={needs} onAdd={(name, pick) => setAddReq({ name, on: pick })} />
+  );
   const calcOf = useMemo(() => {
     const m = {};
     (items || []).forEach((it, i) => { m[it._k] = calc.rows?.[i] || {}; });
@@ -183,9 +251,15 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
 
   return (
     <div className="space-y-4">
-      {Object.entries(lists).map(([name, values], i) => (
-        <datalist key={name} id={`ml-${i}`}>{values.map(v => <option key={v} value={v} />)}</datalist>
-      ))}
+      {addReq && <AddModal req={addReq} onClose={() => setAddReq(null)} onDone={(l, value) => {
+        setLists(prev => ({ ...prev, [l.name]: l.values })); addReq.on(value); setAddReq(null);
+        showToast(`기준정보 '${l.name}'에 '${value}'을(를) 추가했습니다.`);
+      }} />}
+      {Object.keys(lists).length === 0 && (
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+          기준정보 목록이 비어 있어 고를 값이 없습니다. 위의 '기준정보 (이름 관리자)' 탭에서 매크로 엑셀을 먼저 가져와 주세요.
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <button onClick={() => save().then(() => showToast('구매 사양을 저장했습니다.')).catch(err => showToast(err.message, 'error'))}
@@ -210,7 +284,7 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
           {warnings.map((w, i) => <div key={i}>{w}</div>)}
         </div>
       )}
-      <p className="text-xs text-slate-500 flex items-center gap-1"><Calculator size={12} /> 회색 글자는 자동 계산값입니다. 입력칸을 누르면 기준정보 목록이 나오고, 목록에 없는 값도 적을 수 있습니다.</p>
+      <p className="text-xs text-slate-500 flex items-center gap-1"><Calculator size={12} /> 회색 글자는 자동 계산값입니다. 제조사·모델·CPU 같은 칸은 기준정보 목록에서 고르고, 목록에 없으면 '＋ 목록에 추가'로 넣습니다.</p>
 
       {/* 서버 */}
       <Section onAdd={() => add('server')} label="서버" count={servers.length}>
@@ -225,20 +299,20 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
               return (
                 <tr key={k} className="border-b border-slate-50">
                   <td className={td}><Inp v={it.name} on={v => setField(k, 'name', v)} w="w-28" ph="호스트명" /></td>
-                  <td className={td}><Inp v={it.maker} on={v => setField(k, 'maker', v)} listId={dl('제조사_서버')} w="w-20" /></td>
-                  <td className={td}><Inp v={it.model} on={v => setField(k, 'model', v)} listId={dl(`서버모델_${it.maker}`)} w="w-28" />
+                  <td className={td}>{sel(it.maker, v => setField(k, 'maker', v), ['제조사_서버'], 'w-24')}</td>
+                  <td className={td}>{sel(it.model, v => setField(k, 'model', v), it.maker ? [`서버모델_${it.maker}`] : null, 'w-32', '제조사 먼저')}
                     <Code v={cc.codes?.svr} /></td>
                   <td className={td}><Inp v={it.qty} on={v => setField(k, 'qty', v)} w="w-12" /></td>
-                  <td className={td}><Inp v={d.os} on={v => setData(k, 'os', v)} listId={dl('OS')} w="w-32" /></td>
+                  <td className={td}>{sel(d.os, v => setData(k, 'os', v), ['OS'], 'w-32')}</td>
                   <td className={td}><Auto>{cc.usage || '-'}</Auto></td>
-                  <td className={td}><Inp v={d.cpu} on={v => setData(k, 'cpu', v)} listId={dl(`List_${us(it.model)}`)} w="w-36" ph={lists[`List_${us(it.model)}`] ? '호환 CPU' : ''} /></td>
+                  <td className={td}>{sel(d.cpu, v => setData(k, 'cpu', v), it.model ? [`List_${us(it.model)}`] : null, 'w-40', '모델 먼저')}</td>
                   <td className={td}><Auto>{d.cpu ? `${fmt(cc.clock)}GHz / ${fmt(cc.cores)}core` : '-'}</Auto></td>
                   <td className={td}><Inp v={d.cpu_qty} on={v => setData(k, 'cpu_qty', v)} w="w-12" /></td>
-                  <td className={td}><Inp v={d.mem} on={v => setData(k, 'mem', v)} listId={dl('MEMORY')} w="w-24" /></td>
+                  <td className={td}>{sel(d.mem, v => setData(k, 'mem', v), ['MEMORY'], 'w-28')}</td>
                   <td className={td}><Inp v={d.mem_qty} on={v => setData(k, 'mem_qty', v)} w="w-12" /></td>
                   <td className={td}><Auto>{cc.mem_total != null ? `${cc.mem_total}GB` : '-'}</Auto></td>
                   {[1, 2].map(n => [
-                    <td key={`t${n}`} className={td}><Inp v={d[`disk${n}_type`]} on={v => setData(k, `disk${n}_type`, v)} listId={dl('DiskType')} w="w-20" /></td>,
+                    <td key={`t${n}`} className={td}>{sel(d[`disk${n}_type`], v => setData(k, `disk${n}_type`, v), ['DiskType'], 'w-24')}</td>,
                     <td key={`s${n}`} className={td}><Inp v={d[`disk${n}`]} on={v => setData(k, `disk${n}`, v)} w="w-14" /></td>,
                     <td key={`u${n}`} className={td}>
                       <select className={cellCls} value={d[`disk${n}_unit`] || ''} onChange={e => setData(k, `disk${n}_unit`, e.target.value)}>
@@ -246,11 +320,11 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
                       </select></td>,
                     <td key={`q${n}`} className={td}><Inp v={d[`disk${n}_qty`]} on={v => setData(k, `disk${n}_qty`, v)} w="w-12" /></td>,
                   ])}
-                  <td className={td}><Inp v={d.hba} on={v => setData(k, 'hba', v)} listId={dl('HBA')} w="w-24" /></td>
+                  <td className={td}>{sel(d.hba, v => setData(k, 'hba', v), ['HBA'], 'w-28')}</td>
                   <td className={td}><Inp v={d.hba_qty} on={v => setData(k, 'hba_qty', v)} w="w-12" /></td>
-                  <td className={td}><Inp v={d.nic} on={v => setData(k, 'nic', v)} listId={dl('NIC')} w="w-24" /></td>
+                  <td className={td}>{sel(d.nic, v => setData(k, 'nic', v), ['NIC'], 'w-28')}</td>
                   <td className={td}><Inp v={d.nic_qty} on={v => setData(k, 'nic_qty', v)} w="w-12" /></td>
-                  <td className={td}><Inp v={d.gpu} on={v => setData(k, 'gpu', v)} listId={dl(`GPU_${us(it.model)}`)} w="w-24" /></td>
+                  <td className={td}>{sel(d.gpu, v => setData(k, 'gpu', v), it.model ? [`GPU_${us(it.model)}`] : null, 'w-28', '모델 먼저')}</td>
                   <td className={td}><Inp v={d.gpu_qty} on={v => setData(k, 'gpu_qty', v)} w="w-12" /></td>
                   <td className={td}><Inp v={it.note} on={v => setField(k, 'note', v)} w="w-32" /></td>
                   <RowTools onMove={dir => move(it._k, dir)} onCopy={() => duplicate(it._k)} onRemove={() => remove(it._k)} />
@@ -325,11 +399,11 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
                   {i === 0 ? <>
                     <td className={td}><Inp v={it.name} on={v => setField(k, 'name', v)} w="w-28" /></td>
                     <td className={td}><Inp v={it.usage} on={v => setField(k, 'usage', v)} w="w-32" /></td>
-                    <td className={td}><Inp v={it.maker} on={v => setField(k, 'maker', v)} listId={dl('제조사_스토리지')} w="w-24" /></td>
-                    <td className={td}><Inp v={it.model} on={v => setField(k, 'model', v)} listId={dl(`스토리지모델_${it.maker}`)} w="w-24" /><Code v={cc.codes?.sto} /></td>
+                    <td className={td}>{sel(it.maker, v => setField(k, 'maker', v), ['제조사_스토리지'], 'w-28')}</td>
+                    <td className={td}>{sel(it.model, v => setField(k, 'model', v), it.maker ? [`스토리지모델_${it.maker}`] : null, 'w-28', '제조사 먼저')}<Code v={cc.codes?.sto} /></td>
                     <td className={td}><Inp v={it.qty} on={v => setField(k, 'qty', v)} w="w-12" /></td>
                   </> : <td colSpan={5} />}
-                  <td className={td}><Inp v={dk.type} on={v => setDisk(k, i, 'type', v)} listId={dl('DiskType')} w="w-20" /></td>
+                  <td className={td}>{sel(dk.type, v => setDisk(k, i, 'type', v), ['DiskType'], 'w-24')}</td>
                   <td className={td}><Inp v={dk.size} on={v => setDisk(k, i, 'size', v)} w="w-16" /></td>
                   <td className={td}><select className={cellCls} value={dk.unit || ''} onChange={e => setDisk(k, i, 'unit', e.target.value)}>
                     <option value="TB">TB</option><option value="GB">GB</option><option value="">-</option></select></td>
@@ -359,17 +433,19 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
               {of(block).map(it => {
                 const k = it._k, cc = calcOf[k];
                 const group = block === 'etc' ? etcGroup(it.kind) : '스위치';
-                const makerList = block === 'etc' ? `제조사_${it.kind}` : nwMakerList(it.kind);
+                const makerLists = block === 'etc' ? (it.kind ? [`제조사_${it.kind}`] : null) : nwMakerLists(it.kind);
                 return (
                   <tr key={k} className="border-b border-slate-50">
                     <td className={td}>
-                      <input className={`${cellCls} w-32`} value={it.kind} list={`kinds-${block}`} onChange={e => setField(k, 'kind', e.target.value)} />
+                      <select className={`${cellCls} w-32`} value={it.kind} onChange={e => setField(k, 'kind', e.target.value)}>
+                        {[...new Set([...(meta.kinds[block] || []), it.kind])].filter(Boolean).map(v => <option key={v} value={v}>{v}</option>)}
+                      </select>
                     </td>
                     <td className={td}><Inp v={it.name} on={v => setField(k, 'name', v)} w="w-28" ph={cc.name} /></td>
                     <td className={td}><Inp v={it.usage} on={v => setField(k, 'usage', v)} w="w-36" ph={cc.usage} /></td>
-                    <td className={td}><Inp v={it.maker} on={v => setField(k, 'maker', v)} listId={dl(makerList)} w="w-24" /></td>
-                    <td className={td}><Inp v={it.model} on={v => setField(k, 'model', v)} listId={dl(`모델_${group}_${it.maker}`)} w="w-36" /><Code v={cc.codes?.etc} /></td>
-                    <td className={td}><Inp v={it.data.spec} on={v => setData(k, 'spec', v)} listId={dl(`Spec_${group}_${it.maker}`)} w="w-64" /></td>
+                    <td className={td}>{sel(it.maker, v => setField(k, 'maker', v), makerLists, 'w-28')}</td>
+                    <td className={td}>{sel(it.model, v => setField(k, 'model', v), it.maker ? [`모델_${group}_${it.maker}`] : null, 'w-40', '제조사 먼저')}<Code v={cc.codes?.etc} /></td>
+                    <td className={td}>{sel(it.data.spec, v => setData(k, 'spec', v), it.maker ? [`Spec_${group}_${it.maker}`] : null, 'w-72', '제조사 먼저')}</td>
                     <td className={td}><Inp v={it.qty} on={v => setField(k, 'qty', v)} w="w-12" /></td>
                     <td className={td}><Inp v={it.note} on={v => setField(k, 'note', v)} w="w-32" /></td>
                     <RowTools onMove={dir => move(it._k, dir)} onCopy={() => duplicate(it._k)} onRemove={() => remove(it._k)} />
@@ -378,7 +454,6 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
               })}
             </tbody>
           </table>
-          <datalist id={`kinds-${block}`}>{(meta.kinds[block] || []).map(v => <option key={v} value={v} />)}</datalist>
         </Section>
       ))}
 
@@ -398,10 +473,10 @@ const SpecEditor = forwardRef(function SpecEditor({ c, showToast, onCaseChanged 
                       {[...new Set([...(meta.kinds.license || []), it.kind])].filter(Boolean).map(v => <option key={v} value={v}>{v}</option>)}
                     </select>
                   </td>
-                  <td className={td}><Inp v={it.maker} on={v => setField(k, 'maker', v)} listId={dl(`제조사_${it.kind}`)} w="w-28" /></td>
-                  <td className={td}><Inp v={it.model} on={v => setField(k, 'model', v)} listId={dl(`SW_${it.maker}`)} w="w-40" /><Code v={cc.codes?.sw} /></td>
-                  <td className={td}><Inp v={d.version} on={v => setData(k, 'version', v)} listId={dl(`${us(it.model)}_ver`)} w="w-16" /></td>
-                  <td className={td}><Inp v={d.edition} on={v => setData(k, 'edition', v)} listId={dl(`${us(it.model)}_Edition`)} w="w-24" /></td>
+                  <td className={td}>{sel(it.maker, v => setField(k, 'maker', v), it.kind ? [`제조사_${it.kind}`] : null, 'w-36', '유형 먼저')}</td>
+                  <td className={td}>{sel(it.model, v => setField(k, 'model', v), it.maker ? [`SW_${it.maker}`] : null, 'w-44', '제조사 먼저')}<Code v={cc.codes?.sw} /></td>
+                  <td className={td}>{sel(d.version, v => setData(k, 'version', v), it.model ? [`${us(it.model)}_ver`] : null, 'w-24', '제품 먼저')}</td>
+                  <td className={td}>{sel(d.edition, v => setData(k, 'edition', v), it.model ? [`${us(it.model)}_Edition`] : null, 'w-28', '제품 먼저')}</td>
                   <td className={td}>
                     <select className={`${cellCls} w-48`} value={d.basis || ''} onChange={e => setData(k, 'basis', e.target.value)}
                       title={swProducts.find(p => p.key === d.basis)?.name || '수량을 직접 입력'}>

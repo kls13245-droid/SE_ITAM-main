@@ -16,6 +16,7 @@ urlpatterns = [
     path('api/reviews/template/', views.template, name='review_template'),
     path('api/reviews/template/file/', views.template_file, name='review_template_file'),
     path('api/reviews/master/', views.master, name='review_master'),
+    path('api/reviews/master/lists/add/', views.master_list_add, name='review_master_list_add'),
     path('api/reviews/master/import/', views.master_import, name='review_master_import'),
     path('api/reviews/master/codes/<int:code_id>/', views.part_code_update, name='review_part_code_update'),
 ]
