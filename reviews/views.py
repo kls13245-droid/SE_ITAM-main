@@ -1,14 +1,20 @@
 import os
+import tempfile
+from pathlib import Path
 
 from django.db.models import Count
-from django.http import FileResponse, Http404, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
+from django.utils.http import content_disposition_header
 
 from assets.services import ValidationError
 from assets.views import api, body, error, require_admin_confirm
 from .models import CpuSpec, MasterList, PartCode, PptTemplate, ReviewCase, ReviewOutput
-from .services import active_template, attach_source, check_upload, generate, import_master
+from . import spec
+from .services import (active_template, attach_source, build_spec_excel, calc_items, case_items, check_upload,
+                       clean_items, generate, import_items, import_master, safe_stem, save_items)
 
-CASE_FIELDS = ('title', 'line', 'product', 'year', 'status', 'note')
+CASE_FIELDS = ('title', 'line', 'product', 'year', 'status', 'note', 'input_mode')
+INPUT_MODES = [m for m, _ in ReviewCase.INPUT_CHOICES]
 STATUSES = [s for s, _ in ReviewCase.STATUS_CHOICES]
 STATUS_LABELS = dict(ReviewCase.STATUS_CHOICES)
 # 한글 이름으로 보내도 받아 준다 (예전 화면·스크립트 호환)
@@ -37,6 +43,10 @@ def case_dict(c, outputs=False):
         'updated_at': _dt(c.updated_at), 'created_by': c.created_by.username if c.created_by else '',
         'status_label': STATUS_LABELS.get(c.status, c.status),
     })
+    if hasattr(c, 'item_count'):
+        d['item_count'] = c.item_count
+    else:
+        d['item_count'] = c.spec_items.count() if c.pk else 0
     if outputs:
         d['outputs'] = [output_dict(o) for o in c.outputs.select_related('created_by')[:20]]
     else:
@@ -55,6 +65,11 @@ def clean_case(data, partial=False):
         if status not in STATUSES:
             raise ValidationError(f"상태는 {', '.join(STATUS_LABELS.values())} 중 하나여야 합니다.")
         out['status'] = status
+    if 'input_mode' in out:
+        mode = out['input_mode'].upper() or 'FORM'
+        if mode not in INPUT_MODES:
+            raise ValidationError('구매 사양 입력 방식은 FORM(화면 입력) 또는 EXCEL(엑셀 올리기)이어야 합니다.')
+        out['input_mode'] = mode
     if 'year' in out and out['year'] and not (out['year'].isdigit() and len(out['year']) == 4):
         raise ValidationError('심의 연도는 4자리 숫자로 입력해 주세요. (예: 2026)')
     return out
@@ -75,7 +90,8 @@ def _file_response(field):
 @api('GET', 'POST')
 def cases(request):
     if request.method == 'GET':
-        qs = ReviewCase.objects.select_related('created_by').annotate(output_count=Count('outputs'))
+        qs = ReviewCase.objects.select_related('created_by').annotate(
+            output_count=Count('outputs', distinct=True), item_count=Count('spec_items', distinct=True))
         tpl_path, tpl_name = active_template()
         return JsonResponse({'items': [case_dict(c) for c in qs], 'template': tpl_name or ''})
     # multipart(엑셀 같이 올림) 또는 JSON 둘 다 받는다
@@ -85,6 +101,7 @@ def cases(request):
     upload = request.FILES.get('file')
     if upload:
         info = attach_source(case, upload)
+        case.input_mode = 'EXCEL'
         if not case.title:
             case.title = info.get('title') or os.path.splitext(upload.name)[0]
     if not case.title:
@@ -120,6 +137,7 @@ def case_detail(request, case_id):
 def case_upload(request, case_id):
     case = ReviewCase.objects.get(id=case_id)
     attach_source(case, request.FILES.get('file'))
+    case.input_mode = 'EXCEL'
     case.save()
     return JsonResponse(case_dict(case, outputs=True))
 
@@ -134,6 +152,58 @@ def case_generate(request, case_id):
     case = ReviewCase.objects.get(id=case_id)
     output = generate(case, request.user)
     return JsonResponse({'output': output_dict(output), 'case': case_dict(case, outputs=True)})
+
+
+# ---------------------------------------------------------------------------
+# 화면에서 입력하는 구매 사양
+# ---------------------------------------------------------------------------
+def items_response(case, items, **extra):
+    return JsonResponse({'items': items, 'calc': calc_items(items), 'case': case_dict(case, outputs=True), **extra})
+
+
+@api('GET', 'PUT')
+def case_items_view(request, case_id):
+    case = ReviewCase.objects.get(id=case_id)
+    if request.method == 'PUT':
+        items = save_items(case, body(request).get('items'))
+        case.refresh_from_db()
+        return items_response(case, items)
+    return items_response(case, case_items(case), sw_products=spec.SW_PRODUCTS, kinds={
+        'etc': spec.ETC_KINDS, 'nw': spec.NW_KINDS, 'license': spec.LICENSE_KINDS})
+
+
+@api('POST')
+def case_items_calc(request, case_id):
+    """저장하지 않고 계산값만 (화면에서 입력하는 동안 자동 계산 표시용)"""
+    ReviewCase.objects.get(id=case_id)
+    items = clean_items(body(request).get('items'))
+    return JsonResponse({'calc': calc_items(items)})
+
+
+@api('POST')
+def case_items_import(request, case_id):
+    case = ReviewCase.objects.get(id=case_id)
+    upload = request.FILES.get('file')
+    data = None
+    if upload:
+        check_upload(upload)
+        data = upload.read()
+    items, warnings = import_items(case, data)
+    case.refresh_from_db()
+    return items_response(case, items, warnings=warnings)
+
+
+@api('GET')
+def case_items_excel(request, case_id):
+    """화면 입력값으로 만든 구매 사양 엑셀 내려받기 (PPT 없이 엑셀만)"""
+    case = ReviewCase.objects.get(id=case_id)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = build_spec_excel(case, Path(tmp) / 'spec.xlsx')
+        data = path.read_bytes()
+    name = f"{safe_stem('_'.join(p for p in (case.year, case.line, case.product, case.title) if p))}_구매사양.xlsx"
+    resp = HttpResponse(data, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    resp['Content-Disposition'] = content_disposition_header(True, name)
+    return resp
 
 
 @api('GET')

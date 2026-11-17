@@ -1,7 +1,7 @@
 from django.contrib import admin
 from simple_history.admin import SimpleHistoryAdmin
 
-from .models import CpuSpec, MasterList, PartCode, PptTemplate, ReviewCase, ReviewOutput
+from .models import CpuSpec, MasterList, PartCode, PptTemplate, ReviewCase, ReviewOutput, SpecItem
 
 
 @admin.register(PartCode)
@@ -30,12 +30,18 @@ class ReviewOutputInline(admin.TabularInline):
     readonly_fields = fields
 
 
+class SpecItemInline(admin.TabularInline):
+    model = SpecItem
+    extra = 0
+    fields = ('order', 'block', 'kind', 'name', 'maker', 'model', 'qty', 'note')
+
+
 @admin.register(ReviewCase)
 class ReviewCaseAdmin(SimpleHistoryAdmin):
-    list_display = ('title', 'line', 'product', 'year', 'status', 'source_name', 'updated_at')
-    list_filter = ('status', 'year')
+    list_display = ('title', 'line', 'product', 'year', 'status', 'input_mode', 'source_name', 'updated_at')
+    list_filter = ('status', 'year', 'input_mode')
     search_fields = ('title', 'line', 'product')
-    inlines = [ReviewOutputInline]
+    inlines = [SpecItemInline, ReviewOutputInline]
 
 
 @admin.register(PptTemplate)
