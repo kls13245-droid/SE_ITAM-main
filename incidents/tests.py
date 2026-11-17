@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from django.test import Client, TestCase
 
 from . import report
-from .models import Incident, IncidentLog
+from .models import Incident, IncidentLog, ReportBaseline
 
 
 class IncidentApiTest(TestCase):
@@ -19,6 +19,9 @@ class IncidentApiTest(TestCase):
         r = self.c.post('/api/login/', json.dumps({'username': 'se', 'password': 'pw'}),
                         content_type='application/json', HTTP_X_CSRFTOKEN=self.token)
         self.token = r.json()['csrf_token']
+        # 마이그레이션이 넣은 2026년 기존 건은 빼고 빈 상태에서 시험한다
+        Incident.objects.all().delete()
+        ReportBaseline.objects.all().delete()
 
     def j(self, method, url, data=None):
         return getattr(self.c, method)(url, json.dumps(data or {}), content_type='application/json',
