@@ -9,7 +9,7 @@ from django.utils.http import content_disposition_header
 from assets.services import ValidationError
 from assets.views import api, body, error, require_admin_confirm
 from .models import CpuSpec, MasterList, PartCode, PptTemplate, ReviewCase, ReviewOutput
-from . import spec
+from . import master_check, spec
 from .services import (active_template, add_list_value, attach_source, build_spec_excel, calc_items, case_items, check_upload,
                        clean_items, generate, import_items, import_master, list_dict, safe_stem, save_items)
 
@@ -249,6 +249,19 @@ def master(request):
         'lists': [list_dict(m) for m in MasterList.objects.all()],
         'cpus': [{'id': c.id, 'name': c.name, 'clock': c.clock, 'cores': c.cores} for c in CpuSpec.objects.all()],
     })
+
+
+@api('GET')
+def master_check_view(request):
+    """기준정보 검증: 문제 목록 (fix = 바로 정리 가능, ask = 확인 필요, info = 참고)"""
+    return JsonResponse({'issues': master_check.check()})
+
+
+@api('POST')
+def master_check_fix(request):
+    """공백·빈 값·중복만 정리하고 바뀐 내용과 남은 문제 목록을 돌려준다"""
+    changes = master_check.apply_safe()
+    return JsonResponse({'changes': changes, 'issues': master_check.check()})
 
 
 @api('POST')

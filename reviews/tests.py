@@ -464,3 +464,44 @@ class SpecApiTest(ReviewBase):
         self.assertEqual(r.status_code, 200)
         r = self.json('post', url, {'name': '', 'value': 'x'})
         self.assertEqual(r.status_code, 400)
+
+
+class MasterCheckTest(ReviewBase):
+    def setUp(self):
+        super().setUp()
+        from .models import CpuSpec, MasterList, PartCode
+        for name, values in {'제조사_서버': ['DELL', 'LENOVO'], '서버모델_DELL': ['R660', 'R470'],
+                             'List_R660': ['Xeon Gold 5515', ' E-2436', 'Xeon Gold 5515', ''],
+                             'List_R770': ['Xeon 6505P'], '제조사_스토리지': ['NETAPP'],
+                             '스토리지모델_NETAPP': ['AFF A250']}.items():
+            MasterList.objects.create(name=name, values=values)
+        CpuSpec.objects.create(name='Xeon Gold 5515', clock='3.2', cores='8')
+        CpuSpec.objects.create(name='Xeon E-2436', clock='2.9', cores='6')
+        CpuSpec.objects.create(name='Xeon 6505P', clock='2.2', cores='12')
+        for name, code in {'R660': 'Q430-128953', 'R470': '', 'Xeon Gold 5515': 'Q430-', 'AFF A250': 'Q430-118903',
+                           'AFF A250 WAR': ' Q430-102865', 'FAS2720': 'Q430-097964'}.items():
+            PartCode.objects.create(name=name, key=spec._code_key(name, ' .-('), cis_code=code)
+
+    def issues(self):
+        return {(i['level'], i['target'], i['problem'][:20]) for i in self.c.get('/api/reviews/master/check/').json()['issues']}
+
+    def test_finds_problems_and_fixes_only_safe_ones(self):
+        found = self.issues()
+        targets = {(lv, t) for lv, t, _ in found}
+        self.assertIn(('fix', 'List_R660'), targets)                  # 공백·중복·빈 값
+        self.assertIn(('ask', 'R470'), targets)                       # CPU 호환 목록 없음 + CIS 빈칸
+        self.assertIn(('ask', 'R770'), targets)                       # 서버 모델 목록에 없음
+        self.assertIn(('ask', 'LENOVO'), targets)                     # 모델 목록 없는 제조사
+        self.assertIn(('ask', 'E-2436'), targets)                     # CPU 표기 다름
+        self.assertIn(('ask', 'Xeon Gold 5515'), targets)             # CIS 불완전
+        self.assertIn(('ask', 'FAS2720'), targets)                    # 목록에 없는 품목
+        self.assertIn(('fix', 'AFF A250 WAR'), targets)               # CIS 코드 공백
+        self.assertNotIn(('ask', 'AFF A250 WAR'), targets)            # 워런티 코드는 '_'로 찾음
+        r = self.json('post', '/api/reviews/master/check/fix/', {}).json()
+        self.assertEqual(len(r['changes']), 2)
+        from .models import MasterList, PartCode
+        self.assertEqual(MasterList.objects.get(name='List_R660').values, ['Xeon Gold 5515', 'E-2436'])
+        self.assertEqual(MasterList.objects.get(name='List_R660').history.count(), 2)
+        self.assertEqual(PartCode.objects.get(name='AFF A250 WAR').cis_code, 'Q430-102865')
+        self.assertFalse([i for i in r['issues'] if i['level'] == 'fix'])
+        self.assertTrue([i for i in r['issues'] if i['target'] == 'R770'])   # 판단이 필요한 것은 그대로

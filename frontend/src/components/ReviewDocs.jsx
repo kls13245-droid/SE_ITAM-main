@@ -359,7 +359,12 @@ function CaseDetail({ c, hasTemplate, showToast, onChanged, onDelete }) {
 // ---------------------------------------------------------------------------
 // 기준정보 (이름 관리자)
 // ---------------------------------------------------------------------------
-const MASTER_TABS = [['codes', '품목 CIS 코드'], ['lists', '선택 목록'], ['cpus', 'CPU 사양']];
+const MASTER_TABS = [['codes', '품목 CIS 코드'], ['lists', '선택 목록'], ['cpus', 'CPU 사양'], ['check', '검증']];
+const CHECK_LEVEL = {
+  fix: ['정리 가능', 'bg-blue-50 text-blue-700 border-blue-200'],
+  ask: ['확인 필요', 'bg-amber-50 text-amber-700 border-amber-200'],
+  info: ['참고', 'bg-slate-50 text-slate-500 border-slate-200'],
+};
 const IMPORT_LABELS = { codes: '품목 CIS 코드', lists: '선택 목록', cpus: 'CPU 사양' };
 
 function Master({ showToast }) {
@@ -369,8 +374,24 @@ function Master({ showToast }) {
   const [onlyMissing, setOnlyMissing] = useState(false);
   const [importState, setImportState] = useState(null); // { file, preview, busy }
   const [editing, setEditing] = useState(null); // { id, cis_code }
+  const [checkState, setCheckState] = useState(null); // { issues, changes, busy }
 
-  const load = () => apiJson('/api/reviews/master/').then(setData).catch(err => showToast(err.message, 'error'));
+  const load = () => apiJson('/api/reviews/master/').then(d => { setData(d); setCheckState(null); }).catch(err => showToast(err.message, 'error'));
+  const runCheck = () => {
+    setCheckState(s => ({ ...(s || {}), busy: true }));
+    apiJson('/api/reviews/master/check/').then(d => setCheckState({ issues: d.issues, changes: null, busy: false }))
+      .catch(err => { showToast(err.message, 'error'); setCheckState(null); });
+  };
+  const fixSafe = () => {
+    setCheckState(s => ({ ...s, busy: true }));
+    apiJson('/api/reviews/master/check/fix/', jsonBody('POST', {}))
+      .then(d => {
+        setCheckState({ issues: d.issues, changes: d.changes, busy: false });
+        apiJson('/api/reviews/master/').then(setData).catch(() => {});
+        showToast(`공백·중복 ${d.changes.length}건을 정리했습니다.`);
+      })
+      .catch(err => { showToast(err.message, 'error'); setCheckState(s => ({ ...s, busy: false })); });
+  };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
 
@@ -455,9 +476,9 @@ function Master({ showToast }) {
           <div className="p-4 border-b border-slate-100 flex flex-wrap items-center gap-3">
             <div className="flex gap-1">
               {MASTER_TABS.map(([k, label]) => (
-                <button key={k} onClick={() => setSub(k)}
+                <button key={k} onClick={() => { setSub(k); if (k === 'check' && !checkState) runCheck(); }}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium ${sub === k ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
-                  {label} <span className="opacity-60">{data[k].length}</span>
+                  {label} {data[k] && <span className="opacity-60">{data[k].length}</span>}
                 </button>
               ))}
             </div>
@@ -510,6 +531,45 @@ function Master({ showToast }) {
                 ))}
               </div>
             ))}
+            {sub === 'check' && (
+              <div className="p-4 space-y-3">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                  <span className="flex-1 min-w-[260px]">서버 모델·CPU 호환 목록·품목 CIS 코드가 서로 맞는지 확인합니다. 공백·중복은 바로 정리할 수 있고, 나머지는 확인한 뒤 고쳐 주세요. 매크로 엑셀을 다시 가져오면 엑셀 기준으로 덮어쓰므로 원본 엑셀도 같이 고쳐 주세요.</span>
+                  <button onClick={runCheck} disabled={checkState?.busy} className={btnGhost}>
+                    {checkState?.busy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} 다시 검사</button>
+                  {(checkState?.issues || []).some(i => i.level === 'fix') && (
+                    <button onClick={fixSafe} disabled={checkState?.busy} className={btnPrimary}>
+                      <CheckCircle size={14} /> 공백·중복 정리 ({checkState.issues.filter(i => i.level === 'fix').length}건)</button>
+                  )}
+                </div>
+                {checkState?.changes?.length > 0 && (
+                  <div className="text-xs bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-0.5">
+                    <div className="font-bold text-blue-800 mb-1">정리한 내용 (원본 엑셀에도 같이 반영해 주세요)</div>
+                    {checkState.changes.map((c, i) => <div key={i}>{c.area} · {c.target}: {JSON.stringify(c.before)} → {JSON.stringify(c.after)}</div>)}
+                  </div>
+                )}
+                {checkState?.issues && (checkState.issues.length === 0
+                  ? <div className="text-sm text-emerald-600">문제가 없습니다.</div>
+                  : (
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-slate-500 text-xs"><tr>
+                        <th className="text-left px-3 py-2 w-24">구분</th><th className="text-left px-3 py-2 w-28">영역</th>
+                        <th className="text-left px-3 py-2">대상</th><th className="text-left px-3 py-2">문제</th><th className="text-left px-3 py-2">수정안</th></tr></thead>
+                      <tbody>
+                        {checkState.issues.filter(i => match(i.area, i.target, i.problem)).map((i, n) => (
+                          <tr key={n} className="border-t border-slate-50 align-top">
+                            <td className="px-3 py-1.5"><span className={`px-1.5 py-0.5 rounded border text-xs whitespace-nowrap ${CHECK_LEVEL[i.level][1]}`}>{CHECK_LEVEL[i.level][0]}</span></td>
+                            <td className="px-3 py-1.5 text-xs text-slate-500 whitespace-nowrap">{i.area}</td>
+                            <td className="px-3 py-1.5 font-medium">{i.target}</td>
+                            <td className="px-3 py-1.5 text-slate-600">{i.problem}</td>
+                            <td className="px-3 py-1.5 text-slate-500">{i.suggestion}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ))}
+              </div>
+            )}
             {sub === 'cpus' && (
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0"><tr><th className="text-left px-4 py-2">CPU</th><th className="text-left px-4 py-2">클럭 (GHz)</th><th className="text-left px-4 py-2">코어</th></tr></thead>

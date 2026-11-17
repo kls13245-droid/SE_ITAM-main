@@ -255,7 +255,7 @@ def storage_calc(item, master):
         })
     model = (item.get('model') or '').strip()
     return {'disks': disks, 'codes': {
-        'war': master.code(f'code_{model}_WAR') if model else '',
+        'war': master.code(_code_key(f'{model}_WAR', ' .-(')) if model else '',
         'sto': master.code(_code_key(model, ' .-(')) if model else '',
     }}
 
