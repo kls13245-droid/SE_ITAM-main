@@ -564,3 +564,12 @@ class SidebarLayoutTest(BaseTest):
         r = self.c.delete('/api/me/sidebar/', HTTP_X_CSRFTOKEN=self.token)
         self.assertIsNone(r.json()['layout'])
         self.assertEqual(Client().get('/api/me/sidebar/').status_code, 401)
+
+    def test_missing_table_message(self):
+        from unittest import mock
+        from django.db.utils import OperationalError
+        with mock.patch('assets.views.UserSetting.objects') as m:
+            m.update_or_create.side_effect = OperationalError('no such table')
+            r = self.put('/api/me/sidebar/', {'layout': {'groups': []}})
+        self.assertEqual(r.status_code, 503)
+        self.assertIn('migrate', r.json()['error'])

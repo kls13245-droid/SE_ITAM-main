@@ -154,15 +154,20 @@ def clean_sidebar(value):
 @api('GET', 'PUT', 'DELETE')
 def my_sidebar(request):
     """내 사이드바 메뉴 배치. 저장한 적이 없으면 layout=None (화면이 기본 배치를 씀)"""
-    if request.method == 'PUT':
-        value = clean_sidebar(body(request).get('layout'))
-        UserSetting.objects.update_or_create(user=request.user, key='sidebar', defaults={'value': value})
-        return JsonResponse({'layout': value})
-    if request.method == 'DELETE':
-        UserSetting.objects.filter(user=request.user, key='sidebar').delete()
-        return JsonResponse({'layout': None})
-    s = UserSetting.objects.filter(user=request.user, key='sidebar').first()
-    return JsonResponse({'layout': s.value if s else None})
+    from django.db.utils import OperationalError, ProgrammingError
+    try:
+        if request.method == 'PUT':
+            value = clean_sidebar(body(request).get('layout'))
+            UserSetting.objects.update_or_create(user=request.user, key='sidebar', defaults={'value': value})
+            return JsonResponse({'layout': value})
+        if request.method == 'DELETE':
+            UserSetting.objects.filter(user=request.user, key='sidebar').delete()
+            return JsonResponse({'layout': None})
+        s = UserSetting.objects.filter(user=request.user, key='sidebar').first()
+        return JsonResponse({'layout': s.value if s else None})
+    except (OperationalError, ProgrammingError):
+        # 업데이트 후 migrate를 안 한 서버: 저장할 표가 없다
+        return error('사이드바 설정을 저장할 표가 아직 없습니다. 서버에서 python manage.py migrate 를 실행한 뒤 다시 시도해 주세요.', 503)
 
 
 # ---------------------------------------------------------------------------
