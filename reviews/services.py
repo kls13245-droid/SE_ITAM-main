@@ -172,6 +172,31 @@ def import_master(data, dry_run=False):
         }
 
 
+def add_list_value(name, value, clock='', cores=''):
+    """선택 목록에 값 하나를 더한다 (목록이 없으면 새로 만든다). CPU 호환 목록이면 CPU 사양도 같이 넣는다"""
+    name, value = str(name or '').strip(), str(value or '').strip()
+    if not name or not value:
+        raise ValidationError('목록 이름과 추가할 값을 입력해 주세요.')
+    if len(name) > 150 or len(value) > 150:
+        raise ValidationError('이름이나 값이 너무 깁니다.')
+    is_cpu = name.startswith('List_')
+    clock, cores = str(clock or '').strip(), str(cores or '').strip()
+    if is_cpu and not CpuSpec.objects.filter(name=value).exists() and not (clock and cores):
+        raise ValidationError('새 CPU는 클럭(GHz)과 코어 수도 입력해 주세요.')
+    with transaction.atomic():
+        lst, created = MasterList.objects.get_or_create(
+            name=name, defaults={'group': list_group(name), 'values': [], 'source': '화면에서 추가'})
+        if value not in lst.values:
+            lst.values = [*lst.values, value]
+            lst.save()
+        if is_cpu and clock and cores:
+            cpu, _ = CpuSpec.objects.get_or_create(name=value)
+            if (cpu.clock, cpu.cores) != (clock, cores):
+                cpu.clock, cpu.cores = clock, cores
+                cpu.save()
+    return {'id': lst.id, 'name': lst.name, 'group': lst.group, 'values': lst.values, 'source': lst.source}
+
+
 # ---------------------------------------------------------------------------
 # 구매 사양 엑셀 → PPT, 배포용 엑셀
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ from assets.services import ValidationError
 from assets.views import api, body, error, require_admin_confirm
 from .models import CpuSpec, MasterList, PartCode, PptTemplate, ReviewCase, ReviewOutput
 from . import spec
-from .services import (active_template, attach_source, build_spec_excel, calc_items, case_items, check_upload,
+from .services import (active_template, add_list_value, attach_source, build_spec_excel, calc_items, case_items, check_upload,
                        clean_items, generate, import_items, import_master, safe_stem, save_items)
 
 CASE_FIELDS = ('title', 'line', 'product', 'year', 'status', 'note', 'input_mode')
@@ -257,6 +257,13 @@ def master_import(request):
     upload = request.FILES.get('file')
     check_upload(upload)
     return JsonResponse(import_master(upload.read(), dry_run=request.POST.get('mode') == 'preview'))
+
+
+@api('POST')
+def master_list_add(request):
+    """구매 사양 화면의 '목록에 추가': 선택 목록에 값을 더한다 (변경 이력이 남음)"""
+    d = body(request)
+    return JsonResponse(add_list_value(d.get('name'), d.get('value'), d.get('clock'), d.get('cores')))
 
 
 @api('PUT')

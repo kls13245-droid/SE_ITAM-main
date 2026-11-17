@@ -379,3 +379,26 @@ class SpecApiTest(ReviewBase):
         wb = openpyxl.load_workbook(io.BytesIO(dl.content))
         self.assertEqual(wb.sheetnames, ['구매 사양', 'SW-수량산정', 'CPU 호환 모델'])
         self.assertEqual(wb['구매 사양']['C3'].value, 'DB-A')
+
+    def test_add_list_value_from_form(self):
+        url = '/api/reviews/master/lists/add/'
+        r = self.json('post', url, {'name': '제조사_서버', 'value': 'LENOVO'})
+        self.assertEqual(r.json()['values'], ['DELL', 'HPE', 'LENOVO'])
+        # 같은 값은 두 번 들어가지 않는다
+        r = self.json('post', url, {'name': '제조사_서버', 'value': 'LENOVO'})
+        self.assertEqual(r.json()['values'], ['DELL', 'HPE', 'LENOVO'])
+        self.assertEqual(MasterList.objects.get(name='제조사_서버').history.count(), 2)
+        # 없는 목록은 새로 만든다
+        r = self.json('post', url, {'name': '서버모델_LENOVO', 'value': 'SR650 V3'})
+        self.assertEqual(r.json()['group'], '서버모델')
+        # 새 CPU는 클럭·코어가 있어야 한다
+        r = self.json('post', url, {'name': 'List_SR650_V3', 'value': 'Xeon Gold 6526Y'})
+        self.assertEqual(r.status_code, 400)
+        r = self.json('post', url, {'name': 'List_SR650_V3', 'value': 'Xeon Gold 6526Y', 'clock': '2.8', 'cores': '16'})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(CpuSpec.objects.get(name='Xeon Gold 6526Y').cores, '16')
+        # 이미 있는 CPU는 클럭·코어 없이 다른 모델 목록에 넣을 수 있다
+        r = self.json('post', url, {'name': 'List_R660', 'value': 'Xeon Gold 5515'})
+        self.assertEqual(r.status_code, 200)
+        r = self.json('post', url, {'name': '', 'value': 'x'})
+        self.assertEqual(r.status_code, 400)

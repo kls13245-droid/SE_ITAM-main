@@ -189,7 +189,7 @@ def server_calc(item, master):
         'guest': guest,
         'sw': {k: clean_num(v) for k, v in sw.items()},
         'codes': {
-            'svr': master.code(_code_key((item.get('model') or '').strip(), ' .-(')) if item.get('model') else '확인필요',
+            'svr': master.code(_code_key((item.get('model') or '').strip(), ' .-(')) if item.get('model') else '',
             'cpu': master.code(_code_key(d.get('cpu') or '', ' .-')) if d.get('cpu') else '',
             'ram': master.code(_code_key(d.get('mem') or '', ' .-')) if d.get('mem') else '',
             'disk1': master.code(_disk_key(d.get('disk1_type'), d.get('disk1'))) if d.get('disk1_type') else '',
