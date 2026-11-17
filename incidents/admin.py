@@ -1,7 +1,7 @@
 from django.contrib import admin
 from simple_history.admin import SimpleHistoryAdmin
 
-from .models import Incident, IncidentLog, ReportBaseline, ReportSync
+from .models import Incident, IncidentLog, ReportBaseline
 
 
 class IncidentLogInline(admin.TabularInline):
@@ -22,8 +22,3 @@ class IncidentAdmin(SimpleHistoryAdmin):
 class ReportBaselineAdmin(admin.ModelAdmin):
     list_display = ('year', 'kind', 'done_before', 'updated_at')
 
-
-@admin.register(ReportSync)
-class ReportSyncAdmin(admin.ModelAdmin):
-    list_display = ('created_at', 'created_by', 'item_name', 'doc_name', 'ok', 'created_blocks', 'deleted_blocks')
-    readonly_fields = [f.name for f in ReportSync._meta.fields]

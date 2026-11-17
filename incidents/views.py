@@ -6,8 +6,8 @@ from django.utils import timezone
 from assets.models import FieldAsset
 from assets.services import ValidationError, _parse_date
 from assets.views import api, body, error, require_admin_confirm
-from . import monday, report
-from .models import Incident, IncidentLog, ReportBaseline, ReportSync
+from . import report
+from .models import Incident, IncidentLog, ReportBaseline
 
 KINDS = dict(Incident.KIND_CHOICES)
 STATUSES = dict(Incident.STATUS_CHOICES)
@@ -33,7 +33,7 @@ def incident_dict(inc, logs=True):
         'field_asset_id': inc.field_asset_id,
         'field_asset': ({'id': inc.field_asset.id, 'hostname': inc.field_asset.hostname,
                          'site_group': inc.field_asset.site_group} if inc.field_asset_id else None),
-        'hide_in_report': inc.hide_in_report, 'monday_title': inc.monday_title,
+        'hide_in_report': inc.hide_in_report,
         'created_by': inc.created_by.username if inc.created_by else '',
         'created_at': _dt(inc.created_at), 'updated_at': _dt(inc.updated_at),
     }
@@ -157,7 +157,6 @@ def incidents(request):
     return JsonResponse({
         'items': [incident_dict(i, logs=False) for i in qs],
         'counts': report.counts(y), 'year': y,
-        'monday': {'configured': monday.configured(), 'board_id': monday.board_id()},
     })
 
 
@@ -231,66 +230,10 @@ def baseline(request):
 
 
 # ---------------------------------------------------------------------------
-# 주간보고 (monday)
+# 주간보고 글 (복사해서 붙여 넣기용)
 # ---------------------------------------------------------------------------
-def _monday_call(fn):
-    try:
-        return fn()
-    except monday.MondayError as e:
-        return error(str(e), 400 if not monday.configured() else 502)
-
-
 @api('POST')
 def report_text(request):
-    """monday에 연결하지 않고 주간보고 섹션 글만 만든다 (복사해서 붙여 넣기용)"""
     d = _report_date(body(request))
     return JsonResponse({'week': report.week_label(d), 'text': report.preview_text(d),
                          'incident_count': len(report.report_incidents(d))})
-
-
-@api('POST')
-def report_preview(request):
-    data = body(request)
-    d = _report_date(data)
-    return _monday_call(lambda: JsonResponse(monday.preview(d, data.get('item_id'))))
-
-
-@api('POST')
-def report_apply(request):
-    data = body(request)
-    if not data.get('item_id') or not data.get('fingerprint'):
-        raise ValidationError('미리보기를 먼저 눌러 반영할 문서를 확인해 주세요.')
-    d = _report_date(data)
-
-    def run():
-        s = monday.apply(d, data['item_id'], data['fingerprint'], user=request.user)
-        return JsonResponse(sync_dict(s), status=200 if s.ok else 207)
-    return _monday_call(run)
-
-
-def sync_dict(s):
-    return {'id': s.id, 'created_at': _dt(s.created_at), 'created_by': s.created_by.username if s.created_by else '',
-            'item_name': s.item_name, 'doc_name': s.doc_name, 'ok': s.ok, 'message': s.message,
-            'created_blocks': s.created_blocks, 'deleted_blocks': s.deleted_blocks}
-
-
-@api('GET')
-def report_history(request):
-    return JsonResponse({'items': [sync_dict(s) for s in ReportSync.objects.select_related('created_by')[:20]]})
-
-
-@api('POST')
-def import_preview(request):
-    data = body(request)
-    d = _report_date(data)
-    return _monday_call(lambda: JsonResponse(monday.import_preview(d, data.get('item_id'))))
-
-
-@api('POST')
-def import_apply(request):
-    data = body(request)
-    if not data.get('item_id') or not data.get('fingerprint'):
-        raise ValidationError('미리보기를 먼저 눌러 가져올 내용을 확인해 주세요.')
-    d = _report_date(data)
-    return _monday_call(lambda: JsonResponse(
-        monday.import_apply(d, data['item_id'], data['fingerprint'], data.get('baseline') or {}, user=request.user)))

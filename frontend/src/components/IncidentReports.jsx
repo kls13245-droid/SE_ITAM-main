@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, Plus, Search, Send, Download, Loader2, X, Save, Trash2, Pencil, ArrowUp, ArrowDown,
-  CheckCircle, Copy, History, EyeOff, RefreshCw,
+  AlertTriangle, Plus, Search, FileText, Loader2, X, Save, Trash2, Pencil, ArrowUp, ArrowDown,
+  Copy, EyeOff, RefreshCw, Settings2,
 } from 'lucide-react';
 import { apiJson, jsonBody } from '../api/client';
 
 /*
  * 장애·유지보수 보고
  *  - 장애 / PM(후속 조치) / 유지 보수 건을 입력하고 날짜별 진행 기록을 쌓는다.
- *  - '주간보고 반영'을 누르면 monday 주간보고 문서의 [장애 및 유지보수] 섹션만 새 내용으로 바꾼다.
- *    (미리보기 → 확인 → 반영. 미리보기 뒤 문서가 바뀌었으면 반영하지 않는다)
+ *  - '주간보고 글'은 주간보고의 [장애 및 유지보수] 섹션에 붙여 넣을 글을 만들어 준다 (복사해서 붙여 넣기).
  */
 
 const KINDS = [['FAULT', '장애'], ['PM', 'PM (후속 조치)'], ['MAINT', '유지 보수']];
@@ -38,7 +37,6 @@ const today = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 const md = (v) => (v ? `${v.slice(5, 7)}/${v.slice(8, 10)}` : '');
-const fmtDateTime = (v) => (v ? new Date(v).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }) : '-');
 const EMPTY = { kind: 'FAULT', title: '', status: 'IN_PROGRESS', occurred_on: today(), asset_name: '', field_asset_id: '', hide_in_report: false, first_log: '' };
 
 function Badge({ cls, children }) {
@@ -237,192 +235,60 @@ function IncidentDetail({ id, onClose, onChanged, onEdit, onDelete, showToast })
 }
 
 // ---------------------------------------------------------------------------
-// 주간보고 반영 (monday)
+// 주간보고 글 (복사해서 붙여 넣기)
 // ---------------------------------------------------------------------------
-function ReportPanel({ monday, onClose, onDone, showToast }) {
+function ReportTextPanel({ onClose, showToast }) {
   const [date, setDate] = useState(today());
-  const [itemId, setItemId] = useState('');
-  const [pv, setPv] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const [result, setResult] = useState(null);
-  const [history, setHistory] = useState([]);
-  const [text, setText] = useState(null);
-
-  const loadHistory = () => apiJson('/api/incidents/report/history/').then((d) => setHistory(d.items)).catch(() => {});
-  const preview = (item = itemId) => {
-    setLoading(true); setResult(null);
-    apiJson('/api/incidents/report/preview/', jsonBody('POST', { date, item_id: item || undefined }))
-      .then((d) => { setPv(d); setItemId(d.item.id); })
-      .catch((err) => { setPv(null); showToast(err.message, 'error'); })
-      .finally(() => setLoading(false));
-  };
-  const loadText = () => apiJson('/api/incidents/report/text/', jsonBody('POST', { date })).then(setText).catch((err) => showToast(err.message, 'error'));
-
-  useEffect(() => { loadHistory(); if (monday.configured) preview(''); else loadText(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const apply = () => {
-    setApplying(true);
-    apiJson('/api/incidents/report/apply/', jsonBody('POST', { date, item_id: pv.item.id, fingerprint: pv.fingerprint }))
-      .then((d) => { setResult(d); showToast(d.ok ? '주간보고에 반영했습니다.' : d.message, d.ok ? 'success' : 'error'); onDone?.(); })
-      .catch((err) => { setResult({ ok: false, message: err.message }); showToast(err.message, 'error'); })
-      .finally(() => { setApplying(false); setPv(null); loadHistory(); });
-  };
-  const copy = (t) => navigator.clipboard?.writeText(t).then(() => showToast('복사했습니다.'));
+  const [res, setRes] = useState(null);
+  const load = (d) => apiJson('/api/incidents/report/text/', jsonBody('POST', { date: d })).then(setRes).catch((err) => showToast(err.message, 'error'));
+  useEffect(() => { load(date); }, [date]); // eslint-disable-line react-hooks/exhaustive-deps
+  const copy = () => navigator.clipboard?.writeText(res.text).then(() => showToast('복사했습니다.'));
 
   return (
-    <Modal title="주간보고 반영 (monday)" onClose={onClose} wide>
-      {!monday.configured && (
-        <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800 flex gap-2">
-          <AlertTriangle size={16} className="shrink-0 mt-0.5" />
-          <div>서버에 monday API 토큰(MONDAY_API_TOKEN)이 없어 문서에 바로 넣을 수 없습니다. 아래 글을 복사해서 붙여 넣거나, 관리자에게 토큰 설정을 요청해 주세요.</div>
-        </div>
-      )}
-      <div className="flex flex-wrap items-end gap-2 mb-4">
+    <Modal title="주간보고 글" onClose={onClose} wide>
+      <p className="text-sm text-slate-600 mb-3">주간보고의 「장애 및 유지보수」 섹션에 붙여 넣을 글입니다. 끝나지 않은 건 전부와 최근 7일 안에 끝난 건이 들어갑니다 ('주간보고에 넣지 않기' 건 제외).</p>
+      <div className="flex items-end gap-2 mb-3">
         <label className="text-sm text-slate-600">보고 기준일
           <input type="date" className={input} value={date} onChange={(e) => setDate(e.target.value)} />
         </label>
-        {monday.configured && pv && (
-          <label className="text-sm text-slate-600 min-w-64">주간보고 아이템
-            <select className={input} value={itemId} onChange={(e) => { setItemId(e.target.value); preview(e.target.value); }}>
-              {pv.items.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
-            </select>
-          </label>
-        )}
-        {monday.configured
-          ? <button className={btnGhost} onClick={() => preview()} disabled={loading}>{loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} 미리보기</button>
-          : <button className={btnGhost} onClick={loadText}><RefreshCw size={14} /> 다시 만들기</button>}
+        <button className={btnGhost} onClick={() => load(date)}><RefreshCw size={14} /> 다시 만들기</button>
+        {res && <span className="text-sm text-slate-500 ml-2">{res.week} · {res.incident_count}건</span>}
+        <button className={`${btnPrimary} ml-auto`} onClick={copy} disabled={!res}><Copy size={14} /> 복사</button>
       </div>
-
-      {!monday.configured && text && (
-        <div>
-          <div className="flex justify-between items-center mb-1"><span className="text-xs text-slate-500">{text.week} · {text.incident_count}건</span>
-            <button className={btnGhost} onClick={() => copy(text.text)}><Copy size={14} /> 복사</button></div>
-          <pre className="text-xs bg-slate-50 border rounded-lg p-3 whitespace-pre-wrap max-h-96 overflow-y-auto">{text.text}</pre>
-        </div>
-      )}
-
-      {pv && (
-        <>
-          <div className="text-sm text-slate-600 mb-3">
-            <b>{pv.item.name}</b> 의 문서 <b>{pv.doc.name}</b> 에서 「{pv.heading}」 섹션을 바꿉니다.
-            {' '}지금 {pv.old_block_count}줄 → 새 {pv.incident_count}건 ({pv.new_block_count}줄 + 건수 표). 다른 섹션은 건드리지 않습니다.
-            {pv.doc.name && !pv.doc.name.includes(pv.week) && <div className="text-amber-700 text-xs mt-1">문서 이름에 {pv.week}가 없습니다. 아이템에 연결된 문서가 맞는지 확인해 주세요.</div>}
-          </div>
-          <div className="grid md:grid-cols-2 gap-3">
-            <div>
-              <div className="text-xs font-semibold text-slate-500 mb-1">지금 문서</div>
-              <pre className="text-xs bg-slate-50 border rounded-lg p-3 whitespace-pre-wrap h-80 overflow-y-auto text-slate-500">{pv.old_preview || '(비어 있음)'}</pre>
-            </div>
-            <div>
-              <div className="text-xs font-semibold text-slate-500 mb-1">반영 후</div>
-              <pre className="text-xs bg-emerald-50/40 border border-emerald-200 rounded-lg p-3 whitespace-pre-wrap h-80 overflow-y-auto">{pv.preview}</pre>
-            </div>
-          </div>
-          <div className="flex justify-end gap-2 mt-4">
-            <button className={btnGhost} onClick={() => copy(pv.preview)}><Copy size={14} /> 글 복사</button>
-            <button className={btnPrimary} onClick={apply} disabled={applying}>{applying ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} 이 내용으로 반영</button>
-          </div>
-        </>
-      )}
-
-      {result && (
-        <div className={`mt-4 p-3 rounded-lg text-sm flex gap-2 ${result.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700'}`}>
-          {result.ok ? <CheckCircle size={16} /> : <AlertTriangle size={16} />} {result.message}
-        </div>
-      )}
-
-      {history.length > 0 && (
-        <div className="mt-6">
-          <div className="text-xs font-semibold text-slate-500 mb-1 flex items-center gap-1"><History size={12} /> 반영 기록</div>
-          <div className="text-xs divide-y border rounded-lg">
-            {history.map((h) => (
-              <div key={h.id} className="px-3 py-1.5 flex gap-3">
-                <span className="text-slate-400 w-36 shrink-0">{fmtDateTime(h.created_at)}</span>
-                <span className="w-16 shrink-0">{h.created_by}</span>
-                <span className={h.ok ? 'text-emerald-700' : 'text-red-600'}>{h.item_name} · {h.message}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <pre className="text-xs bg-slate-50 border rounded-lg p-3 whitespace-pre-wrap max-h-[60vh] overflow-y-auto">{res ? res.text : '불러오는 중…'}</pre>
     </Modal>
   );
 }
 
 // ---------------------------------------------------------------------------
-// monday 문서에서 가져오기 (처음 한 번)
+// ITAM 이전 완료 건수 (건수 표에 더함)
 // ---------------------------------------------------------------------------
-function ImportPanel({ onClose, onDone, showToast }) {
-  const [pv, setPv] = useState(null);
-  const [baseline, setBaseline] = useState({});
-  const [busy, setBusy] = useState(true);
-  const date = today();
-
-  const load = (item) => {
-    setBusy(true);
-    apiJson('/api/incidents/import/preview/', jsonBody('POST', { date, item_id: item }))
-      .then((d) => { setPv(d); setBaseline(Object.fromEntries(d.baseline.map((b) => [b.kind, b.current ?? b.suggested]))); })
-      .catch((err) => showToast(err.message, 'error'))
-      .finally(() => setBusy(false));
-  };
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const apply = () => {
-    setBusy(true);
-    apiJson('/api/incidents/import/apply/', jsonBody('POST', { date, item_id: pv.item.id, fingerprint: pv.fingerprint, baseline }))
-      .then((d) => { showToast(`${d.added}건을 가져왔습니다${d.skipped ? ` (이미 있는 ${d.skipped}건 건너뜀)` : ''}.`); onDone(); onClose(); })
-      .catch((err) => showToast(err.message, 'error'))
-      .finally(() => setBusy(false));
-  };
-
+function BaselinePanel({ year, counts, onClose, onSaved, showToast }) {
+  const [values, setValues] = useState(Object.fromEntries(counts.map((r) => [r.kind, r.baseline])));
+  const save = () => apiJson('/api/incidents/baseline/', jsonBody('PUT', { year, values }))
+    .then(() => { showToast('저장했습니다.'); onSaved(); onClose(); })
+    .catch((err) => showToast(err.message, 'error'));
   return (
-    <Modal title="monday 주간보고에서 가져오기" onClose={onClose} wide>
-      <p className="text-sm text-slate-600 mb-3">지금 주간보고 문서의 「장애 및 유지보수」 섹션에 있는 건과 진행 기록을 ITAM으로 옮깁니다. 문서는 바꾸지 않습니다.</p>
-      {busy && !pv && <Loader2 className="animate-spin text-slate-400" />}
-      {pv && (
-        <>
-          <label className="text-sm text-slate-600 block mb-3 max-w-sm">주간보고 아이템
-            <select className={input} value={pv.item.id} onChange={(e) => load(e.target.value)}>
-              {pv.items.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
-            </select>
+    <Modal title={`${year}년 ITAM 이전 완료 건수`} onClose={onClose}>
+      <p className="text-sm text-slate-600 mb-3">ITAM에 입력하지 않은, 올해 이미 끝난 건수입니다. 건수 표의 총 건수와 완료에 더해집니다.</p>
+      <div className="grid grid-cols-3 gap-3">
+        {counts.map((r) => (
+          <label key={r.kind} className="text-sm text-slate-600">{r.label}
+            <input type="number" min="0" className={input} value={values[r.kind] ?? 0} onChange={(e) => setValues({ ...values, [r.kind]: e.target.value })} />
           </label>
-          <div className="border rounded-lg divide-y max-h-72 overflow-y-auto mb-4">
-            {pv.incidents.length === 0 && <div className="p-3 text-sm text-slate-400">가져올 건을 찾지 못했습니다. ('[장애] 제목 | 상태' 형식의 줄을 찾습니다)</div>}
-            {pv.incidents.map((p, i) => (
-              <div key={i} className={`p-2 text-sm ${p.duplicate ? 'opacity-50' : ''}`}>
-                <div className="flex gap-2 items-center">
-                  <Badge cls={KIND_STYLE[p.kind]}>{KIND_LABEL[p.kind]}</Badge>
-                  <span className="font-medium">{p.title}</span>
-                  <Badge cls={STATUS_STYLE[p.status]}>{STATUS_LABEL[p.status]}</Badge>
-                  <span className="text-xs text-slate-400">기록 {p.logs.length}개 · 발생 {p.occurred_on}</span>
-                  {p.duplicate && <span className="text-xs text-slate-500">이미 있음 — 건너뜀</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="text-xs font-semibold text-slate-500 mb-1">ITAM 이전 완료 건수 <span className="font-normal">(문서 표의 총 건수 − 가져오는 건수. 올해 건수 표가 문서와 맞도록 더해 둡니다)</span></div>
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            {pv.baseline.map((b) => (
-              <label key={b.kind} className="text-sm text-slate-600">{b.label}
-                <input type="number" min="0" className={input} value={baseline[b.kind] ?? ''} onChange={(e) => setBaseline({ ...baseline, [b.kind]: e.target.value })} />
-                <span className="text-xs text-slate-400">{b.doc_row ? `문서 총 ${b.doc_row[0]}건 · 가져오는 ${b.items_in_doc}건` : '문서 표에서 못 찾음'}</span>
-              </label>
-            ))}
-          </div>
-          <div className="flex justify-end gap-2">
-            <button className={btnGhost} onClick={onClose}>취소</button>
-            <button className={btnPrimary} onClick={apply} disabled={busy}><Download size={14} /> 가져오기</button>
-          </div>
-        </>
-      )}
+        ))}
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <button className={btnGhost} onClick={onClose}>취소</button>
+        <button className={btnPrimary} onClick={save}><Save size={14} /> 저장</button>
+      </div>
     </Modal>
   );
 }
 
 // ---------------------------------------------------------------------------
 export default function IncidentReports({ showToast, askDelete }) {
-  const [data, setData] = useState({ items: [], counts: [], year: new Date().getFullYear(), monday: { configured: false } });
+  const [data, setData] = useState({ items: [], counts: [], year: new Date().getFullYear() });
   const [loading, setLoading] = useState(true);
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [kind, setKind] = useState('');
@@ -430,7 +296,7 @@ export default function IncidentReports({ showToast, askDelete }) {
   const [q, setQ] = useState('');
   const [form, setForm] = useState(null);
   const [detailId, setDetailId] = useState(null);
-  const [panel, setPanel] = useState(null); // 'report' | 'import'
+  const [panel, setPanel] = useState(null); // 'report' | 'baseline'
   const [fieldAssets, setFieldAssets] = useState([]);
 
   const load = () => {
@@ -447,7 +313,7 @@ export default function IncidentReports({ showToast, askDelete }) {
 
   const del = (inc) => askDelete({
     title: '장애·유지보수 건 삭제', target: inc.title,
-    warnings: ['진행 기록도 함께 지워집니다. 이미 반영한 monday 문서에는 남아 있습니다 (다음 반영 때 빠집니다).'],
+    warnings: ['진행 기록도 함께 지워집니다.'],
     url: `/api/incidents/${inc.id}/`,
     onDone: () => { setDetailId(null); load(); showToast('삭제했습니다.'); },
   });
@@ -456,15 +322,17 @@ export default function IncidentReports({ showToast, askDelete }) {
     <div className="w-full max-w-6xl mx-auto">
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <h2 className="text-xl font-bold text-slate-800 mr-auto flex items-center gap-2"><AlertTriangle className="text-red-500" size={22} /> 장애·유지보수 보고</h2>
-        {data.items.length === 0 && !q && !kind && data.monday.configured && (
-          <button className={btnGhost} onClick={() => setPanel('import')}><Download size={14} /> monday 문서에서 가져오기</button>
-        )}
-        <button className={btnGhost} onClick={() => setPanel('report')}><Send size={14} /> 주간보고 반영</button>
+        <button className={btnGhost} onClick={() => setPanel('report')}><FileText size={14} /> 주간보고 글</button>
         <button className={btnPrimary} onClick={() => setForm({ ...EMPTY })}><Plus size={14} /> 새 건</button>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
         <CountsTable counts={data.counts} year={data.year} />
+        <div className="flex justify-end mt-2">
+          <button className="text-xs text-slate-500 hover:text-blue-600 inline-flex items-center gap-1" onClick={() => setPanel('baseline')}>
+            <Settings2 size={12} /> ITAM 이전 완료 건수
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2 mb-3">
@@ -513,8 +381,8 @@ export default function IncidentReports({ showToast, askDelete }) {
         onSaved={(d) => { setForm(null); load(); setDetailId(d.id); }} />}
       {detailId && !form && <IncidentDetail id={detailId} showToast={showToast} onClose={() => setDetailId(null)} onChanged={load}
         onEdit={(inc) => setForm({ ...EMPTY, ...inc, field_asset_id: inc.field_asset_id || '', done_on: inc.done_on || '' })} onDelete={del} />}
-      {panel === 'report' && <ReportPanel monday={data.monday} showToast={showToast} onClose={() => setPanel(null)} />}
-      {panel === 'import' && <ImportPanel showToast={showToast} onClose={() => setPanel(null)} onDone={load} />}
+      {panel === 'report' && <ReportTextPanel showToast={showToast} onClose={() => setPanel(null)} />}
+      {panel === 'baseline' && <BaselinePanel year={data.year} counts={data.counts} showToast={showToast} onClose={() => setPanel(null)} onSaved={load} />}
     </div>
   );
 }
