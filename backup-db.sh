@@ -2,8 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-DB="$ROOT/db.sqlite3"
-BACKUP_DIR="${BACKUP_DIR:-$ROOT/backups}"
+# 데이터 폴더 (config/settings.py와 같은 규칙): ITAM_DATA_DIR → /etc/itam/data_dir → 코드 폴더
+DATA_DIR="${ITAM_DATA_DIR:-}"
+if [ -z "$DATA_DIR" ] && [ -f /etc/itam/data_dir ]; then
+  DATA_DIR="$(head -n1 /etc/itam/data_dir | tr -d '[:space:]')"
+fi
+DATA_DIR="${DATA_DIR:-$ROOT}"
+DB="$DATA_DIR/db.sqlite3"
+BACKUP_DIR="${BACKUP_DIR:-$DATA_DIR/backups}"
 KEEP="${KEEP:-14}"
 
 if [ ! -f "$DB" ]; then

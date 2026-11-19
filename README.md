@@ -191,3 +191,18 @@ python manage.py import_review_master 26년라인명_제품_투자심의_매크�
 - ↺ 버튼으로 처음 배치로 되돌리기
 - 새 메뉴가 생기면 마지막 그룹에 자동으로 붙습니다. Site Topology(캠퍼스·건물)는 맨 아래 고정입니다
 
+
+## 데이터 폴더 옮기기 (DB를 별도 볼륨으로)
+
+DB(`db.sqlite3`), 업로드 파일(`media/`), 백업(`backups/`)은 기본으로 코드 폴더에 있습니다. OS 디스크가 아닌 별도 볼륨에 두려면:
+
+```bash
+df -h                                  # 새 볼륨이 마운트됐는지 확인 (예: /data)
+cd /root/SE_ITAM-main && git pull
+./move-data.sh /data/itam              # 멈춤 → 복사 → 무결성·행 수 비교 → /etc/itam/data_dir 기록 → 다시 시작
+```
+
+- 위치는 `/etc/itam/data_dir` 파일(또는 환경변수 `ITAM_DATA_DIR`)로 정해지며, ITAM·`python manage.py`·`backup-db.sh`가 모두 같은 위치를 씁니다
+- 볼륨이 마운트되지 않으면(`.itam-data` 표시 파일이 없으면) ITAM이 빈 DB를 새로 만들지 않고 시작을 멈춥니다
+- 원래 파일은 지우지 않습니다. 되돌리기: `rm /etc/itam/data_dir && systemctl restart itam`
+- 볼륨은 재부팅 후에도 붙도록 `/etc/fstab`에 등록돼 있어야 합니다
