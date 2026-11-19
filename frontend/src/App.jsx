@@ -53,7 +53,7 @@ export default function App() {
 
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [view, setView] = useState('topology'); // 'topology' | 'field' (현장 장비) | 'reviews' (투자심의 자료) | 'incidents' (장애·유지보수 보고)
+  const [view, setView] = useState('topology'); // 'topology' | 'field' (현장 장비) | 'reviews' (ADB 심의) | 'incidents' (장애·유지보수 보고)
   const [fieldAssets, setFieldAssets] = useState([]); // 전체 검색용 현장 장비 목록
   const [fieldFocusId, setFieldFocusId] = useState(null); // 검색에서 고른 현장 장비
   const [currentUser, setCurrentUser] = useState({ username: '', isAdmin: false });
@@ -914,7 +914,7 @@ export default function App() {
           <div className="flex items-center text-sm font-medium text-slate-500 flex-1">
             <span className="cursor-pointer hover:text-blue-600 transition-colors" onClick={goHome}>사이트 현황</span>
             {view === 'field' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">서버 현황</span></>}
-            {view === 'reviews' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">투자심의 자료</span></>}
+            {view === 'reviews' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">ADB 심의</span></>}
             {view === 'incidents' && <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-slate-800 font-bold">장애·유지보수 보고</span></>}
             {view === 'topology' && selectedBuilding && (
               <><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="cursor-pointer hover:text-blue-600 transition-colors" onClick={() => { setSelectedBuilding(null); setSelectedRack(null); setSelectedServer(null); setIsEditing(false); }}>{selectedBuilding.campusName}</span><ChevronRight size={16} className="mx-2 text-slate-400" /><span className="text-blue-600 cursor-pointer hover:underline" onClick={() => handleBuildingClick(selectedBuilding, {name: selectedBuilding.campusName})}>{selectedBuilding.name}</span></>

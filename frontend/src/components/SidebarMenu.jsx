@@ -22,7 +22,7 @@ const DEFAULT_LAYOUT = {
 const MENU = {
   field: { label: '서버 현황', icon: MapPin, active: 'bg-orange-500/20 text-orange-300', iconActive: 'text-orange-400' },
   incidents: { label: '장애·유지보수 보고', icon: AlertTriangle, active: 'bg-red-500/20 text-red-300', iconActive: 'text-red-400' },
-  reviews: { label: '투자심의 자료', icon: FileText, active: 'bg-violet-500/20 text-violet-300', iconActive: 'text-violet-400' },
+  reviews: { label: 'ADB 심의', icon: FileText, active: 'bg-violet-500/20 text-violet-300', iconActive: 'text-violet-400' },
 };
 
 // 저장된 배치를 지금 있는 메뉴에 맞춘다 (없어진 메뉴는 빼고, 새 메뉴는 마지막 그룹에 추가)

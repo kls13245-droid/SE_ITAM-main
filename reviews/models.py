@@ -67,6 +67,13 @@ class ReviewCase(models.Model):
         ('RECEIVED', '입고완료'), # 장비가 ITAMS에 등록됨
         ('REJECTED', '반려'),     # 심의에서 떨어짐. 다시 작성중으로 돌릴 수 있음
     ]
+    # 현황판의 3구분 (대기 / 진행 / 완료). 반려는 다시 작성해서 올려야 하므로 '대기'로 센다
+    STAGE_CHOICES = [('WAIT', '대기'), ('PROGRESS', '진행'), ('DONE', '완료')]
+    STATUS_STAGE = {
+        'DRAFT': 'WAIT', 'REJECTED': 'WAIT',
+        'REVIEW': 'PROGRESS', 'APPROVED': 'PROGRESS', 'PURCHASE': 'PROGRESS',
+        'RECEIVED': 'DONE',
+    }
 
     title = models.CharField(max_length=200, verbose_name="업무명")
     line = models.CharField(max_length=100, blank=True, verbose_name="라인명")
@@ -92,6 +99,10 @@ class ReviewCase(models.Model):
 
     def __str__(self):
         return self.title
+
+    @property
+    def stage(self):
+        return self.STATUS_STAGE.get(self.status, 'WAIT')
 
 
 class SpecItem(models.Model):

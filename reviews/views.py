@@ -9,7 +9,7 @@ from django.utils.http import content_disposition_header
 from assets.services import ValidationError
 from assets.views import api, body, error, require_admin_confirm
 from .models import CpuSpec, MasterList, PartCode, PptTemplate, ReviewCase, ReviewOutput
-from . import master_check, spec
+from . import master_check, master_edit, spec
 from .services import (active_template, add_list_value, attach_source, build_spec_excel, calc_items, case_items, check_upload,
                        clean_items, generate, import_items, import_master, list_dict, safe_stem, save_items)
 
@@ -17,6 +17,7 @@ CASE_FIELDS = ('title', 'line', 'product', 'year', 'status', 'note', 'input_mode
 INPUT_MODES = [m for m, _ in ReviewCase.INPUT_CHOICES]
 STATUSES = [s for s, _ in ReviewCase.STATUS_CHOICES]
 STATUS_LABELS = dict(ReviewCase.STATUS_CHOICES)
+STAGE_LABELS = dict(ReviewCase.STAGE_CHOICES)
 # 한글 이름으로 보내도 받아 준다 (예전 화면·스크립트 호환)
 STATUS_ALIASES = {label: code for code, label in ReviewCase.STATUS_CHOICES}
 STATUS_ALIASES['완료'] = 'APPROVED'
@@ -42,6 +43,7 @@ def case_dict(c, outputs=False):
         'source_uploaded_at': _dt(c.source_uploaded_at), 'created_at': _dt(c.created_at),
         'updated_at': _dt(c.updated_at), 'created_by': c.created_by.username if c.created_by else '',
         'status_label': STATUS_LABELS.get(c.status, c.status),
+        'stage': c.stage, 'stage_label': STAGE_LABELS[c.stage],
     })
     if hasattr(c, 'item_count'):
         d['item_count'] = c.item_count
@@ -87,13 +89,39 @@ def _file_response(field):
 # ---------------------------------------------------------------------------
 # 심의건
 # ---------------------------------------------------------------------------
+def board(items):
+    """심의 전체 현황판: 연도별 대기·진행·완료 건수 (상태 6단계 → 3구분은 ReviewCase.STATUS_STAGE)"""
+    stages = [k for k, _ in ReviewCase.STAGE_CHOICES]
+
+    def row(year, cases):
+        r = {'year': year, 'total': len(cases), **{k: 0 for k in stages},
+             'by_status': {k: 0 for k in STATUSES}}
+        for c in cases:
+            r[c['stage']] += 1
+            r['by_status'][c['status']] = r['by_status'].get(c['status'], 0) + 1
+        return r
+
+    years = sorted({c['year'] for c in items} - {''}, reverse=True)
+    if any(not c['year'] for c in items):
+        years.append('')   # 연도 없는 심의건
+    return {
+        'stages': [{'key': k, 'label': label,
+                    'statuses': [s for s, st in ReviewCase.STATUS_STAGE.items() if st == k]}
+                   for k, label in ReviewCase.STAGE_CHOICES],
+        'status_labels': STATUS_LABELS,
+        'all': row('', items),
+        'years': [row(y, [c for c in items if c['year'] == y]) for y in years],
+    }
+
+
 @api('GET', 'POST')
 def cases(request):
     if request.method == 'GET':
         qs = ReviewCase.objects.select_related('created_by').annotate(
             output_count=Count('outputs', distinct=True), item_count=Count('spec_items', distinct=True))
         tpl_path, tpl_name = active_template()
-        return JsonResponse({'items': [case_dict(c) for c in qs], 'template': tpl_name or ''})
+        items = [case_dict(c) for c in qs]
+        return JsonResponse({'items': items, 'template': tpl_name or '', 'board': board(items)})
     # multipart(엑셀 같이 올림) 또는 JSON 둘 다 받는다
     data = request.POST if request.content_type.startswith('multipart') else body(request)
     fields = clean_case(data)
@@ -244,11 +272,60 @@ def template_file(request):
 # ---------------------------------------------------------------------------
 @api('GET')
 def master(request):
+    lists = list(MasterList.objects.all())
+    cpu_lists = [m for m in lists if m.name.startswith('List_')]
     return JsonResponse({
-        'codes': [{'id': p.id, 'name': p.name, 'key': p.key, 'cis_code': p.cis_code} for p in PartCode.objects.all()],
-        'lists': [list_dict(m) for m in MasterList.objects.all()],
-        'cpus': [{'id': c.id, 'name': c.name, 'clock': c.clock, 'cores': c.cores} for c in CpuSpec.objects.all()],
+        'codes': [master_edit.code_dict(p) for p in PartCode.objects.all()],
+        'lists': [list_dict(m) for m in lists],
+        'cpus': [master_edit.cpu_dict(c, cpu_lists) for c in CpuSpec.objects.all()],
+        'part_categories': [{'key': k, 'label': v} for k, v in master_edit.PART_CATEGORIES],
     })
+
+
+@api('GET')
+def master_history(request):
+    """기준정보 변경 이력. ?kind=codes|lists|cpus [&id=대상 id]"""
+    obj_id = request.GET.get('id')
+    return JsonResponse({'items': master_edit.history_rows(request.GET.get('kind', ''), int(obj_id) if obj_id else None)})
+
+
+@api('POST')
+def master_lists(request):
+    """Part 등록: 새 선택 목록 만들기 (예: 서버모델_SUPERMICRO)"""
+    d = body(request)
+    return JsonResponse(list_dict(master_edit.create_list(d.get('name'), d.get('values') or [])), status=201)
+
+
+@api('PUT', 'DELETE')
+def master_list_detail(request, list_id):
+    """Part 등록: 목록의 값 고치기(추가·이름 바꾸기·삭제·순서) / 목록 통째로 지우기(관리자 확인)"""
+    m = MasterList.objects.get(id=list_id)
+    if request.method == 'PUT':
+        return JsonResponse(list_dict(master_edit.update_list(m, body(request).get('values'))))
+    require_admin_confirm(request)
+    m.delete()
+    return JsonResponse({'success': True})
+
+
+@api('POST')
+def master_cpus(request):
+    return JsonResponse(master_edit.cpu_dict(master_edit.save_cpu(body(request))), status=201)
+
+
+@api('PUT', 'DELETE')
+def master_cpu_detail(request, cpu_id):
+    cpu = CpuSpec.objects.get(id=cpu_id)
+    if request.method == 'PUT':
+        return JsonResponse(master_edit.cpu_dict(master_edit.save_cpu(body(request), cpu)))
+    require_admin_confirm(request)
+    master_edit.delete_cpu(cpu)
+    return JsonResponse({'success': True})
+
+
+@api('POST')
+def part_codes(request):
+    """CIS 코드 관리: 품목 추가"""
+    return JsonResponse(master_edit.code_dict(master_edit.save_code(body(request))), status=201)
 
 
 @api('GET')
@@ -278,9 +355,12 @@ def master_list_add(request):
     return JsonResponse(add_list_value(d.get('name'), d.get('value'), d.get('clock'), d.get('cores')))
 
 
-@api('PUT')
+@api('PUT', 'DELETE')
 def part_code_update(request, code_id):
+    """CIS 코드 관리: 품목·이름 관리자 이름·CIS 코드 고치기 / 품목 삭제(관리자 확인)"""
     p = PartCode.objects.get(id=code_id)
-    p.cis_code = str(body(request).get('cis_code') or '').strip()
-    p.save()
-    return JsonResponse({'id': p.id, 'name': p.name, 'key': p.key, 'cis_code': p.cis_code})
+    if request.method == 'PUT':
+        return JsonResponse(master_edit.code_dict(master_edit.save_code(body(request), p)))
+    require_admin_confirm(request)
+    p.delete()
+    return JsonResponse({'success': True})

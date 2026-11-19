@@ -269,8 +269,9 @@ def add_list_value(name, value, clock='', cores=''):
 
 
 def list_dict(m):
+    from .master_edit import part_category
     return {'id': m.id, 'name': m.name, 'label': list_label(m.name), 'group': m.group, 'values': m.values,
-            'source': m.source}
+            'source': m.source, 'category': part_category(m.name)}
 
 
 # ---------------------------------------------------------------------------

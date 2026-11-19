@@ -568,3 +568,107 @@ class LicenseNeedsTest(TestCase):
         self.assertEqual(spec.basis_for('Oracle', 'Standard'), 'oracle_se')
         self.assertEqual(spec.basis_for('Windows Server DSP'), 'win_dsp')
         self.assertEqual(spec.basis_for('Ubuntu'), '')
+
+
+# ---------------------------------------------------------------------------
+# 현황판, CIS 코드 관리, Part 등록
+# ---------------------------------------------------------------------------
+class BoardTest(ReviewBase):
+    def test_board_counts_by_stage_and_year(self):
+        for title, status, year in (('A', 'DRAFT', '2026'), ('B', 'REJECTED', '2026'), ('C', 'REVIEW', '2026'),
+                                    ('D', 'APPROVED', '2027'), ('E', 'PURCHASE', '2027'), ('F', 'RECEIVED', '2027'),
+                                    ('G', 'DRAFT', '')):
+            ReviewCase.objects.create(title=title, status=status, year=year)
+        d = self.c.get('/api/reviews/').json()
+        stage = {c['title']: c['stage'] for c in d['items']}
+        self.assertEqual(stage, {'A': 'WAIT', 'B': 'WAIT', 'C': 'PROGRESS', 'D': 'PROGRESS', 'E': 'PROGRESS',
+                                 'F': 'DONE', 'G': 'WAIT'})
+        b = d['board']
+        self.assertEqual([s['key'] for s in b['stages']], ['WAIT', 'PROGRESS', 'DONE'])
+        self.assertEqual(b['stages'][0]['statuses'], ['DRAFT', 'REJECTED'])
+        self.assertEqual((b['all']['total'], b['all']['WAIT'], b['all']['PROGRESS'], b['all']['DONE']), (7, 3, 3, 1))
+        self.assertEqual([r['year'] for r in b['years']], ['2027', '2026', ''])
+        y26 = b['years'][1]
+        self.assertEqual((y26['total'], y26['WAIT'], y26['PROGRESS'], y26['DONE']), (3, 2, 1, 0))
+        self.assertEqual(y26['by_status']['REJECTED'], 1)
+
+
+class CisCodeAdminTest(ReviewBase):
+    def test_crud_and_history(self):
+        r = self.json('post', '/api/reviews/master/codes/', {'name': 'R670', 'cis_code': ' Q430-111111 '})
+        self.assertEqual(r.status_code, 201)
+        code = r.json()
+        self.assertEqual((code['key'], code['cis_code']), ('code_R670', 'Q430-111111'))  # 이름 관리자 이름 자동
+        self.assertEqual(self.json('post', '/api/reviews/master/codes/', {'name': 'r670'}).status_code, 400)  # 중복
+        self.assertEqual(self.json('post', '/api/reviews/master/codes/', {'name': 'X', 'key': 'R670'}).status_code, 400)
+        r = self.json('put', f"/api/reviews/master/codes/{code['id']}/", {'cis_code': 'Q430-222222'})
+        self.assertEqual(r.json()['cis_code'], 'Q430-222222')
+        self.assertEqual(r.json()['name'], 'R670')   # 안 보낸 칸은 그대로
+        self.json('put', f"/api/reviews/master/codes/{code['id']}/", {'cis_code': 'Q430-222222'})  # 바뀐 것 없음
+        hist = self.c.get(f"/api/reviews/master/history/?kind=codes&id={code['id']}").json()['items']
+        self.assertEqual([h['type'] for h in hist], ['Updated', 'Created'])
+        self.assertEqual(hist[0]['user'], 'admin')
+        self.assertEqual(hist[0]['changes'], [{'field': 'CIS 코드', 'old': 'Q430-111111', 'new': 'Q430-222222'}])
+        # 삭제는 관리자 확인
+        url = f"/api/reviews/master/codes/{code['id']}/"
+        self.assertEqual(self.json('delete', url, {}).status_code, 403)
+        self.assertEqual(self.json('delete', url, {'admin_username': 'boss', 'admin_password': 'bosspw'}).status_code, 200)
+        hist = self.c.get('/api/reviews/master/history/?kind=codes').json()['items']
+        self.assertEqual(hist[0]['type'], 'Deleted')
+        self.assertEqual(hist[0]['name'], 'R670')
+        # 화면에서 지운 품목은 엑셀을 다시 가져와도 돌아오지 않는다
+        PartCode.objects.create(name='R660', key='code_R660')
+        PartCode.objects.get(name='R660').delete()
+        r = self.upload('/api/reviews/master/import/', make_workbook(), mode='preview').json()
+        self.assertEqual(r['codes']['skipped'], 1)
+
+    def test_bad_history_kind(self):
+        self.assertEqual(self.c.get('/api/reviews/master/history/?kind=x').status_code, 400)
+
+
+class PartRegisterTest(ReviewBase):
+    def test_lists_by_category_and_edit_values(self):
+        from .master_edit import part_category
+        self.assertEqual([part_category(n) for n in ('제조사_서버', '서버모델_DELL', '스토리지모델_NetApp', 'List_R760',
+                                                     'MEMORY', 'DiskType', 'HBA', 'GPU_R760', '모델_스위치_DELL',
+                                                     '제조사_10G스위치', 'OS', 'SW_MS', 'vSphere_구독_ver', '아무거나')],
+                         ['server', 'server', 'storage', 'cpu', 'memdisk', 'memdisk', 'card', 'card', 'nw', 'nw',
+                          'sw', 'sw', 'sw', 'etc'])
+        r = self.json('post', '/api/reviews/master/lists/', {'name': '서버모델_SUPERMICRO', 'values': ['SYS-1', ' SYS-1 ', '']})
+        self.assertEqual(r.status_code, 201)
+        lst = r.json()
+        self.assertEqual((lst['values'], lst['category'], lst['group']), (['SYS-1'], 'server', '서버모델'))
+        self.assertEqual(self.json('post', '/api/reviews/master/lists/', {'name': '서버모델_supermicro'}).status_code, 400)
+        r = self.json('put', f"/api/reviews/master/lists/{lst['id']}/", {'values': ['SYS-2', 'SYS-1']})
+        self.assertEqual(r.json()['values'], ['SYS-2', 'SYS-1'])
+        self.json('put', f"/api/reviews/master/lists/{lst['id']}/", {'values': ['SYS-1']})
+        hist = self.c.get(f"/api/reviews/master/history/?kind=lists&id={lst['id']}").json()['items']
+        self.assertEqual(hist[0]['changes'], [{'field': '값 삭제', 'old': 'SYS-2', 'new': ''}])
+        self.assertEqual(hist[1]['changes'], [{'field': '값 추가', 'old': '', 'new': 'SYS-2'}])
+        url = f"/api/reviews/master/lists/{lst['id']}/"
+        self.assertEqual(self.json('delete', url, {}).status_code, 403)
+        self.assertEqual(self.json('delete', url, {'admin_username': 'boss', 'admin_password': 'bosspw'}).status_code, 200)
+
+    def test_cpu_crud_keeps_compat_lists(self):
+        MasterList.objects.create(name='List_R760', group='CPU 호환 목록', values=['Xeon Gold 5515'])
+        MasterList.objects.create(name='List_R660', group='CPU 호환 목록', values=[])
+        r = self.json('post', '/api/reviews/master/cpus/', {'name': 'Xeon Gold 6526Y', 'clock': '2.8', 'cores': '16',
+                                                             'lists': ['List_R760', 'List_R660']})
+        self.assertEqual(r.status_code, 201)
+        cpu = r.json()
+        self.assertEqual(sorted(cpu['lists']), ['List_R660', 'List_R760'])
+        self.assertEqual(self.json('post', '/api/reviews/master/cpus/', {'name': 'Y', 'clock': 'abc', 'cores': '8'}).status_code, 400)
+        self.assertEqual(self.json('post', '/api/reviews/master/cpus/', {'name': 'xeon gold 6526y', 'clock': '1', 'cores': '8'}).status_code, 400)
+        # 이름을 바꾸면 호환 목록의 이름도 바뀌고, 빠진 목록에서는 지워진다
+        r = self.json('put', f"/api/reviews/master/cpus/{cpu['id']}/", {'name': 'Xeon Gold 6526Y+', 'clock': '2.8',
+                                                                        'cores': '16', 'lists': ['List_R760']})
+        self.assertEqual(r.json()['lists'], ['List_R760'])
+        self.assertEqual(MasterList.objects.get(name='List_R760').values, ['Xeon Gold 5515', 'Xeon Gold 6526Y+'])
+        self.assertEqual(MasterList.objects.get(name='List_R660').values, [])
+        hist = self.c.get(f"/api/reviews/master/history/?kind=cpus&id={cpu['id']}").json()['items']
+        self.assertEqual(hist[0]['changes'], [{'field': 'CPU', 'old': 'Xeon Gold 6526Y', 'new': 'Xeon Gold 6526Y+'}])
+        url = f"/api/reviews/master/cpus/{cpu['id']}/"
+        self.assertEqual(self.json('delete', url, {'admin_username': 'boss', 'admin_password': 'bosspw'}).status_code, 200)
+        self.assertEqual(MasterList.objects.get(name='List_R760').values, ['Xeon Gold 5515'])
+        data = self.c.get('/api/reviews/master/').json()
+        self.assertEqual([c['key'] for c in data['part_categories']][:3], ['server', 'storage', 'cpu'])
