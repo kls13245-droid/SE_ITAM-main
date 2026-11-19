@@ -5,12 +5,16 @@ import {
 } from 'lucide-react';
 import { apiJson, jsonBody, API_BASE_URL } from '../api/client';
 import SpecEditor from './SpecEditor';
+import CisCodeAdmin from './CisCodeAdmin';
+import PartRegister from './PartRegister';
 
 /*
- * 투자심의 자료 (ADB-Doc)
- *  - 심의건: 구매 사양을 화면에서 입력하거나(SpecEditor) 엑셀을 올리고 'PPT·엑셀 만들기'를 누르면
- *    서버가 PPT와 배포용 엑셀을 만든다 (PC용 InvestPPT.exe와 같은 엔진)
- *  - 기준정보: 심의 매크로 엑셀의 '이름 관리자' 내용 (품목 CIS 코드, 선택 목록, CPU 사양)
+ * ADB 심의 (ADB-Doc)
+ *  - 심의건: 위에 전체 현황판(대기·진행·완료 건수). 구매 사양을 화면에서 입력하거나(SpecEditor) 엑셀을 올리고
+ *    'PPT·엑셀 만들기'를 누르면 서버가 PPT와 배포용 엑셀을 만든다 (PC용 InvestPPT.exe와 같은 엔진)
+ *  - CIS 코드 관리: 품목별 CIS 코드 추가·수정·삭제와 변경 이력 (CisCodeAdmin)
+ *  - Part 등록: 서버·스토리지·CPU 등 기준정보 부품을 직접 입력 (PartRegister)
+ *  - 기준정보: 심의 매크로 엑셀의 '이름 관리자' 가져오기, 선택 목록 보기, 검증
  */
 
 // 서버에는 영문 코드로 저장되고, 화면에는 한글로 보여 준다
@@ -60,15 +64,18 @@ export default function ReviewDocs({ showToast, askDelete }) {
   return (
     <div className="flex-1 flex flex-col min-w-0 animate-in fade-in duration-300">
       <div className="flex items-center justify-between mb-5">
-        <h2 className="text-2xl font-bold text-slate-800 flex items-center"><FileText className="mr-2 text-violet-500" /> 투자심의 자료</h2>
+        <h2 className="text-2xl font-bold text-slate-800 flex items-center"><FileText className="mr-2 text-violet-500" /> ADB 심의</h2>
         <div className="flex bg-white border border-slate-200 rounded-lg p-1 shadow-sm">
-          {[['cases', '심의건'], ['master', '기준정보 (이름 관리자)']].map(([k, label]) => (
+          {[['cases', '심의건'], ['codes', 'CIS 코드 관리'], ['parts', 'Part 등록'], ['master', '기준정보 (이름 관리자)']].map(([k, label]) => (
             <button key={k} onClick={() => setTab(k)}
               className={`px-4 py-1.5 rounded-md text-sm font-medium ${tab === k ? 'bg-violet-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>{label}</button>
           ))}
         </div>
       </div>
-      {tab === 'cases' ? <Cases showToast={showToast} askDelete={askDelete} /> : <Master showToast={showToast} />}
+      {tab === 'cases' && <Cases showToast={showToast} askDelete={askDelete} />}
+      {tab === 'codes' && <CisCodeAdmin showToast={showToast} askDelete={askDelete} />}
+      {tab === 'parts' && <PartRegister showToast={showToast} askDelete={askDelete} />}
+      {tab === 'master' && <Master showToast={showToast} />}
     </div>
   );
 }
@@ -84,9 +91,11 @@ function Cases({ showToast, askDelete }) {
   const [detail, setDetail] = useState(null);
   const [creating, setCreating] = useState(false);
   const [q, setQ] = useState('');
+  const [board, setBoard] = useState(null);
+  const [pick, setPick] = useState(null); // 현황판에서 누른 칸 { year: null(전체) | '2026' | '', stage: null(총 건수) | 'WAIT' ... }
 
   const load = () => apiJson('/api/reviews/')
-    .then(d => { setItems(d.items); setTemplate(d.template); return d; })
+    .then(d => { setItems(d.items); setTemplate(d.template); setBoard(d.board); return d; })
     .catch(err => showToast(err.message, 'error'))
     .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -98,9 +107,12 @@ function Cases({ showToast, askDelete }) {
   };
 
   const onChanged = (c) => { setDetail(c); load(); };
-  const filtered = items.filter(c => !q || [c.title, c.line, c.product, c.year].join(' ').toLowerCase().includes(q.toLowerCase()));
+  const filtered = items.filter(c => (!q || [c.title, c.line, c.product, c.year].join(' ').toLowerCase().includes(q.toLowerCase()))
+    && (!pick || ((pick.year === null || c.year === pick.year) && (!pick.stage || c.stage === pick.stage))));
 
   return (
+    <div className="flex-1 flex flex-col gap-4 min-h-0">
+    <StatusBoard board={board} pick={pick} onPick={setPick} />
     <div className="flex-1 flex flex-col lg:flex-row gap-5 min-h-0">
       <div className="lg:w-96 shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col min-h-0">
         <div className="p-4 border-b border-slate-100 flex gap-2">
@@ -146,6 +158,69 @@ function Cases({ showToast, askDelete }) {
             <Presentation size={36} className="mx-auto mb-3 text-slate-300" />
             왼쪽에서 심의건을 고르거나 '새 심의건'을 눌러 주세요.
           </div>
+        )}
+      </div>
+    </div>
+    </div>
+  );
+}
+
+// 심의 전체 현황판 (장애·유지보수 보고의 건수 표와 같은 모양). 칸을 누르면 아래 목록이 그 칸의 심의건만 보인다
+const STAGE_STYLE = { WAIT: 'text-slate-700', PROGRESS: 'text-blue-700', DONE: 'text-emerald-700' };
+
+function StatusBoard({ board, pick, onPick }) {
+  if (!board) return null;
+  const rows = [{ ...board.all, all: true }, ...board.years];
+  const same = (year, stage) => pick && pick.year === year && pick.stage === stage;
+  const click = (year, stage) => onPick(same(year, stage) ? null : { year, stage });
+  const tip = (r, st) => st.statuses.map(s => `${board.status_labels[s]} ${r.by_status[s] || 0}건`).join(' · ');
+  const cell = (r, stage, value, extra = '', title = '') => {
+    const year = r.all ? null : r.year;
+    return (
+      <td key={stage || 'total'} className="px-1 py-1" title={title}>
+        <button onClick={() => click(year, stage)} disabled={!value && !same(year, stage)}
+          className={`w-full rounded-md px-2 py-1 tabular-nums hover:bg-violet-50 disabled:hover:bg-transparent disabled:text-slate-300 ${same(year, stage) ? 'bg-violet-100 ring-1 ring-violet-400' : ''} ${extra}`}>
+          {value}
+        </button>
+      </td>
+    );
+  };
+  const pickLabel = pick && [pick.year === null ? '전체 연도' : pick.year ? `${pick.year}년` : '연도 없음',
+    pick.stage ? board.stages.find(s => s.key === pick.stage)?.label : '모든 구분'].join(' · ');
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+      <table className="w-full text-sm border border-slate-200 rounded-lg overflow-hidden">
+        <thead className="bg-slate-50 text-slate-600">
+          <tr>
+            <th className="text-left px-3 py-2">심의 전체 현황</th>
+            <th className="px-3 py-2 w-28">총 건수</th>
+            {board.stages.map(st => (
+              <th key={st.key} className="px-3 py-2 w-28" title={st.statuses.map(s => board.status_labels[s]).join(' · ')}>
+                {st.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.all ? 'all' : `y${r.year}`} className={`border-t border-slate-100 text-center ${r.all ? 'bg-violet-50/40' : ''}`}>
+              <td className={`text-left px-3 py-1.5 ${r.all ? 'font-bold' : 'font-medium'}`}>{r.all ? '전체' : r.year ? `${r.year}년` : '연도 없음'}</td>
+              {cell(r, null, r.total, 'font-bold')}
+              {board.stages.map(st => cell(r, st.key, r[st.key], `font-medium ${STAGE_STYLE[st.key]}`, tip(r, st)))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="flex items-center gap-2 mt-2 text-xs text-slate-500">
+        <span className="mr-auto">
+          {board.stages.map(st => `${st.label} = ${st.statuses.map(s => board.status_labels[s]).join('·')}`).join(' / ')}
+          <span className="ml-2 text-slate-400">숫자를 누르면 아래 목록이 그 심의건만 보이고, 마우스를 올리면 상태별 건수가 보입니다.</span>
+        </span>
+        {pick && (
+          <button onClick={() => onPick(null)} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 hover:bg-violet-200">
+            {pickLabel} <X size={12} />
+          </button>
         )}
       </div>
     </div>
@@ -359,7 +434,8 @@ function CaseDetail({ c, hasTemplate, showToast, onChanged, onDelete }) {
 // ---------------------------------------------------------------------------
 // 기준정보 (이름 관리자)
 // ---------------------------------------------------------------------------
-const MASTER_TABS = [['codes', '품목 CIS 코드'], ['lists', '선택 목록'], ['cpus', 'CPU 사양'], ['check', '검증']];
+// 품목 CIS 코드는 'CIS 코드 관리' 탭, 값 입력·수정은 'Part 등록' 탭에서 한다
+const MASTER_TABS = [['lists', '선택 목록'], ['cpus', 'CPU 사양'], ['check', '검증']];
 const CHECK_LEVEL = {
   fix: ['정리 가능', 'bg-blue-50 text-blue-700 border-blue-200'],
   ask: ['확인 필요', 'bg-amber-50 text-amber-700 border-amber-200'],
@@ -369,11 +445,9 @@ const IMPORT_LABELS = { codes: '품목 CIS 코드', lists: '선택 목록', cpus
 
 function Master({ showToast }) {
   const [data, setData] = useState(null);
-  const [sub, setSub] = useState('codes');
+  const [sub, setSub] = useState('lists');
   const [q, setQ] = useState('');
-  const [onlyMissing, setOnlyMissing] = useState(false);
   const [importState, setImportState] = useState(null); // { file, preview, busy }
-  const [editing, setEditing] = useState(null); // { id, cis_code }
   const [checkState, setCheckState] = useState(null); // { issues, changes, busy }
 
   const load = () => apiJson('/api/reviews/master/').then(d => { setData(d); setCheckState(null); }).catch(err => showToast(err.message, 'error'));
@@ -407,9 +481,6 @@ function Master({ showToast }) {
       .then(() => { setImportState(null); load(); showToast('없는 값을 기준정보에 더했습니다.'); })
       .catch(err => { showToast(err.message, 'error'); setImportState(s => ({ ...s, busy: false })); });
   };
-  const saveCode = () => apiJson(`/api/reviews/master/codes/${editing.id}/`, jsonBody('PUT', { cis_code: editing.cis_code }))
-    .then(p => { setData(d => ({ ...d, codes: d.codes.map(x => (x.id === p.id ? p : x)) })); setEditing(null); showToast('CIS 코드를 저장했습니다.'); })
-    .catch(err => showToast(err.message, 'error'));
 
   const match = (...vals) => !q || vals.join(' ').toLowerCase().includes(q.toLowerCase());
   const missing = useMemo(() => (data?.codes || []).filter(p => !CIS_OK.test(p.cis_code.trim())).length, [data]);
@@ -429,7 +500,7 @@ function Master({ showToast }) {
         <Database size={18} className="text-violet-500" />
         <div className="text-sm text-slate-600 flex-1 min-w-[240px]">
           구매 사양 화면에서 고르는 기준정보입니다. <b>ITAMS가 기준</b>이라 매크로 엑셀을 올려도 이미 있는 값은 바꾸거나 지우지 않고, 없는 값만 더합니다.
-          {missing > 0 && <span className="ml-2 text-amber-600 font-medium">CIS 코드 확인 필요 {missing}개</span>}
+          {missing > 0 && <span className="ml-2 text-amber-600 font-medium">CIS 코드 확인 필요 {missing}개 ('CIS 코드 관리' 탭)</span>}
         </div>
         <FileButton accept=".xlsm,.xlsx" onPick={pickImport} className={btnPrimary}><Upload size={14} /> 매크로 엑셀에서 없는 값 추가</FileButton>
       </div>
@@ -487,40 +558,8 @@ function Master({ showToast }) {
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input value={q} onChange={e => setQ(e.target.value)} placeholder="검색" className={`${input} pl-8 py-1.5`} />
             </div>
-            {sub === 'codes' && (
-              <label className="text-sm text-slate-600 flex items-center gap-1.5">
-                <input type="checkbox" checked={onlyMissing} onChange={e => setOnlyMissing(e.target.checked)} /> 확인 필요만
-              </label>
-            )}
           </div>
           <div className="overflow-y-auto flex-1">
-            {sub === 'codes' && (
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-slate-500 text-xs sticky top-0"><tr><th className="text-left px-4 py-2">품목</th><th className="text-left px-4 py-2">CIS 코드</th><th className="text-left px-4 py-2">이름 관리자</th><th /></tr></thead>
-                <tbody>
-                  {data.codes.filter(p => match(p.name, p.cis_code, p.key) && (!onlyMissing || !CIS_OK.test(p.cis_code.trim()))).map(p => (
-                    <tr key={p.id} className="border-t border-slate-50 hover:bg-slate-50">
-                      <td className="px-4 py-2 font-medium text-slate-800">{p.name}</td>
-                      <td className="px-4 py-2 font-mono">
-                        {editing?.id === p.id ? (
-                          <input autoFocus className={`${input} py-1 font-mono`} value={editing.cis_code}
-                            onChange={e => setEditing(s => ({ ...s, cis_code: e.target.value }))}
-                            onKeyDown={e => { if (e.key === 'Enter') saveCode(); if (e.key === 'Escape') setEditing(null); }} />
-                        ) : CIS_OK.test(p.cis_code.trim()) ? p.cis_code
-                          : <span className="text-amber-600 flex items-center gap-1"><AlertTriangle size={12} /> {p.cis_code || '없음'}</span>}
-                      </td>
-                      <td className="px-4 py-2 text-xs text-slate-400 font-mono">{p.key}</td>
-                      <td className="px-4 py-2 text-right whitespace-nowrap">
-                        {editing?.id === p.id ? (
-                          <><button onClick={saveCode} className="text-blue-600 hover:underline text-xs font-bold mr-2">저장</button>
-                            <button onClick={() => setEditing(null)} className="text-slate-400 hover:underline text-xs">취소</button></>
-                        ) : <button onClick={() => setEditing({ id: p.id, cis_code: p.cis_code })} className="text-slate-400 hover:text-blue-600"><Pencil size={13} /></button>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
             {sub === 'lists' && Object.entries(groups).map(([g, lists]) => (
               <div key={g} className="px-4 py-3 border-b border-slate-100">
                 <div className="text-xs font-bold text-violet-600 uppercase mb-2">{g}</div>
@@ -535,7 +574,7 @@ function Master({ showToast }) {
             {sub === 'check' && (
               <div className="p-4 space-y-3">
                 <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
-                  <span className="flex-1 min-w-[260px]">서버 모델·CPU 호환 목록·품목 CIS 코드가 서로 맞는지 확인합니다. 공백·중복은 바로 정리할 수 있고, 나머지는 확인한 뒤 고쳐 주세요. CIS 코드는 고객사에서 받은 뒤 '품목 CIS 코드' 탭에서 입력합니다.</span>
+                  <span className="flex-1 min-w-[260px]">서버 모델·CPU 호환 목록·품목 CIS 코드가 서로 맞는지 확인합니다. 공백·중복은 바로 정리할 수 있고, 나머지는 확인한 뒤 고쳐 주세요. CIS 코드는 고객사에서 받은 뒤 'CIS 코드 관리' 탭에서 입력하고, 목록 값은 'Part 등록' 탭에서 고칩니다.</span>
                   <button onClick={runCheck} disabled={checkState?.busy} className={btnGhost}>
                     {checkState?.busy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} 다시 검사</button>
                   {(checkState?.issues || []).some(i => i.level === 'fix') && (

@@ -20,5 +20,11 @@ urlpatterns = [
     path('api/reviews/master/check/', views.master_check_view, name='review_master_check'),
     path('api/reviews/master/check/fix/', views.master_check_fix, name='review_master_check_fix'),
     path('api/reviews/master/import/', views.master_import, name='review_master_import'),
+    path('api/reviews/master/history/', views.master_history, name='review_master_history'),
+    path('api/reviews/master/lists/', views.master_lists, name='review_master_lists'),
+    path('api/reviews/master/lists/<int:list_id>/', views.master_list_detail, name='review_master_list_detail'),
+    path('api/reviews/master/cpus/', views.master_cpus, name='review_master_cpus'),
+    path('api/reviews/master/cpus/<int:cpu_id>/', views.master_cpu_detail, name='review_master_cpu_detail'),
+    path('api/reviews/master/codes/', views.part_codes, name='review_part_codes'),
     path('api/reviews/master/codes/<int:code_id>/', views.part_code_update, name='review_part_code_update'),
 ]
