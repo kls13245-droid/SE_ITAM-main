@@ -125,7 +125,10 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = 'static/'
+# 관리자 페이지(/admin/)의 CSS·JS. 운영(DEBUG=False, gunicorn)에서는 Django가 정적 파일을 내주지 않고
+# nginx /static/ 경로도 서버 실제 폴더와 맞지 않아 관리자 화면이 깨졌다.
+# 그래서 /admin/static/ 아래로 두고 Django가 직접 내준다 (config/urls.py). nginx는 /admin/을 이미 Django로 넘기므로 설정 변경 없음.
+STATIC_URL = '/admin/static/'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
