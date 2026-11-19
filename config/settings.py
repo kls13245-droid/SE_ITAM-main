@@ -17,6 +17,31 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+# 데이터 폴더 (DB·업로드 파일·백업). OS 디스크가 아닌 별도 볼륨에 둘 때 쓴다.
+#   1) 환경변수 ITAM_DATA_DIR, 2) /etc/itam/data_dir 파일 첫 줄, 3) 없으면 예전처럼 코드 폴더
+# 파일로도 읽는 이유: systemd 밖에서 python manage.py ... 를 직접 실행해도 같은 DB를 쓰게 하려고.
+def _data_dir():
+    value = os.environ.get('ITAM_DATA_DIR', '').strip()
+    if not value:
+        try:
+            value = Path('/etc/itam/data_dir').read_text(encoding='utf-8').strip().splitlines()[0].strip()
+        except (OSError, IndexError):
+            value = ''
+    if not value:
+        return None
+    path = Path(value)
+    # 볼륨이 마운트되지 않으면 빈 마운트 폴더(OS 디스크)에 새 DB가 생겨 버린다. 표시 파일로 막는다.
+    if not (path / '.itam-data').is_file():
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            f'ITAM 데이터 폴더 {path} 에 .itam-data 표시 파일이 없습니다. '
+            '데이터 볼륨이 마운트됐는지 확인해 주세요 (df -h). 처음 옮기는 중이라면 README의 데이터 폴더 옮기기를 따라 주세요.')
+    return path
+
+
+DATA_DIR = _data_dir()
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
@@ -86,7 +111,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': (DATA_DIR or BASE_DIR) / 'db.sqlite3',
     }
 }
 
@@ -148,7 +173,7 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', '/')
 
 # 업로드 파일 (심의자료 엑셀·PPT 템플릿·산출물). 공개 URL로 열지 않고 로그인한 API로만 내려받는다.
 # 서버를 옮기거나 백업할 때 db.sqlite3와 함께 이 폴더도 챙겨야 한다.
-MEDIA_ROOT = Path(os.environ.get('DJANGO_MEDIA_ROOT', BASE_DIR / 'media'))
+MEDIA_ROOT = Path(os.environ.get('DJANGO_MEDIA_ROOT', (DATA_DIR or BASE_DIR) / 'media'))
 MEDIA_URL = '/media/'
 
 # 화면에서 템플릿을 올리지 않았을 때 쓸 투자심의 PPT 템플릿 경로 (선택)
